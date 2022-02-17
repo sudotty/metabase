@@ -19,7 +19,19 @@
  ;; clear-cache! -> conversations-list ->
  ;; paged-list-request -> GET -> do-slack-request ->
  ;; slack-app-token -> clear-cache!
- clear-cache!)
+ *cached-conversations
+ conversations-list
+ *cached-users
+ users-list)
+
+(defn ^:private clear-cache! [old-token new-token]
+  (if new-token
+    (when (not= old-token new-token)
+      (future (reset! *cached-conversations {nil (conversations-list)}))
+      (future (reset! *cached-users {nil (users-list)})))
+    (do
+      (reset! *cached-conversations {})
+      (reset! *cached-users {}))))
 
 (defsetting slack-token
   (str (deferred-tru "Deprecated Slack API token for connecting the Metabase Slack bot.")
