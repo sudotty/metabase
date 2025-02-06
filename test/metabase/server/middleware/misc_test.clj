@@ -1,10 +1,11 @@
 (ns metabase.server.middleware.misc-test
-  (:require [clojure.test :refer :all]
-            [medley.core :as m]
-            [metabase.public-settings :as public-settings]
-            [metabase.server.middleware.misc :as mw.misc]
-            [metabase.test :as mt]
-            [ring.mock.request :as ring.mock]))
+  (:require
+   [clojure.test :refer :all]
+   [medley.core :as m]
+   [metabase.public-settings :as public-settings]
+   [metabase.server.middleware.misc :as mw.misc]
+   [metabase.test :as mt]
+   [ring.mock.request :as ring.mock]))
 
 (defn- maybe-set-site-url
   [request]
@@ -38,12 +39,12 @@
         (is (nil? (public-settings/site-url))))))
   (testing "Site URL should not be inferred if already set in DB"
     (mt/with-temporary-setting-values [site-url "https://mb1.example.com"]
-        (let [request (mock-request "/" "https://mb2.example.com" nil nil)]
-          (maybe-set-site-url request)
-          (is (= "https://mb1.example.com" (public-settings/site-url))))))
+      (let [request (mock-request "/" "https://mb2.example.com" nil nil)]
+        (maybe-set-site-url request)
+        (is (= "https://mb1.example.com" (public-settings/site-url))))))
   (testing "Site URL should not be inferred if already set by env variable"
     (mt/with-temporary-setting-values [site-url nil]
-      (mt/with-temp-env-var-value [mb-site-url "https://mb1.example.com"]
+      (mt/with-temp-env-var-value! [mb-site-url "https://mb1.example.com"]
         (let [request (mock-request "/" "https://mb2.example.com" nil nil)]
           (maybe-set-site-url request)
           (is (= "https://mb1.example.com" (public-settings/site-url))))))))

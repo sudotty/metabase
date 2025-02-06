@@ -1,6 +1,15 @@
-import React from "react";
+import cx from "classnames";
+import { type ChangeEvent, useState } from "react";
 import { t } from "ttag";
-import NewsletterForm from "../../containers/NewsletterForm";
+
+import ButtonsS from "metabase/css/components/buttons.module.css";
+import { trackSimpleEvent } from "metabase/lib/analytics";
+import { useSelector } from "metabase/lib/redux";
+import { subscribeToNewsletter } from "metabase/setup/utils";
+import { Switch } from "metabase/ui";
+
+import { getIsStepActive, getUserEmail } from "../../selectors";
+
 import {
   StepBody,
   StepFooter,
@@ -8,30 +17,57 @@ import {
   StepTitle,
 } from "./CompletedStep.styled";
 
-export interface CompletedStepProps {
-  isStepActive: boolean;
-}
+export const CompletedStep = (): JSX.Element | null => {
+  const [checkboxValue, setCheckboxValue] = useState(false);
+  const email = useSelector(getUserEmail);
 
-const CompletedStep = ({
-  isStepActive,
-}: CompletedStepProps): JSX.Element | null => {
+  const isStepActive = useSelector(state =>
+    getIsStepActive(state, "completed"),
+  );
   if (!isStepActive) {
     return null;
   }
+
+  const baseUrl = window.MetabaseRoot ?? "/";
+
+  const handleSwitchToggle = (e: ChangeEvent<HTMLInputElement>) => {
+    setCheckboxValue(e.target.checked);
+    trackSimpleEvent({
+      event: "newsletter-toggle-clicked",
+      triggered_from: "setup",
+      event_detail: e.target.checked ? "opted-in" : "opted-out",
+    });
+  };
+
+  const handleGoToMetabase = () => {
+    if (checkboxValue && email) {
+      subscribeToNewsletter(email);
+    }
+  };
 
   return (
     <StepRoot>
       <StepTitle>{t`You're all set up!`}</StepTitle>
       <StepBody>
-        <NewsletterForm />
+        <Switch
+          checked={checkboxValue}
+          onChange={handleSwitchToggle}
+          label={t`Get infrequent emails about new releases and feature updates.`}
+        />
       </StepBody>
       <StepFooter>
-        <a className="Button Button--primary" href="/">
+        <a
+          onClick={handleGoToMetabase}
+          className={cx(
+            ButtonsS.Button,
+            ButtonsS.ButtonPrimary,
+            ButtonsS.ButtonLarge,
+          )}
+          href={baseUrl}
+        >
           {t`Take me to Metabase`}
         </a>
       </StepFooter>
     </StepRoot>
   );
 };
-
-export default CompletedStep;

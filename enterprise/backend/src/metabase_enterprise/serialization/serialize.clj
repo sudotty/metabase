@@ -1,30 +1,19 @@
 (ns metabase-enterprise.serialization.serialize
   "Transform entity into a form suitable for serialization."
-  (:require [clojure.string :as str]
-            [medley.core :as m]
-            [metabase-enterprise.serialization.names :refer [fully-qualified-name]]
-            [metabase.mbql.normalize :as mbql.normalize]
-            [metabase.mbql.schema :as mbql.s]
-            [metabase.mbql.util :as mbql.util]
-            [metabase.models.card :refer [Card]]
-            [metabase.models.dashboard :refer [Dashboard]]
-            [metabase.models.dashboard-card :refer [DashboardCard]]
-            [metabase.models.dashboard-card-series :refer [DashboardCardSeries]]
-            [metabase.models.database :as database :refer [Database]]
-            [metabase.models.dependency :refer [Dependency]]
-            [metabase.models.dimension :refer [Dimension]]
-            [metabase.models.field :as field :refer [Field]]
-            [metabase.models.metric :refer [Metric]]
-            [metabase.models.native-query-snippet :refer [NativeQuerySnippet]]
-            [metabase.models.pulse :refer [Pulse]]
-            [metabase.models.pulse-card :refer [PulseCard]]
-            [metabase.models.pulse-channel :refer [PulseChannel]]
-            [metabase.models.segment :refer [Segment]]
-            [metabase.models.table :refer [Table]]
-            [metabase.models.user :refer [User]]
-            [metabase.shared.models.visualization-settings :as mb.viz]
-            [metabase.util :as u]
-            [toucan.db :as db]))
+  (:require
+   [clojure.string :as str]
+   [medley.core :as m]
+   [metabase-enterprise.serialization.names :refer [fully-qualified-name]]
+   [metabase.legacy-mbql.normalize :as mbql.normalize]
+   [metabase.lib.schema.id :as lib.schema.id]
+   [metabase.lib.util.match :as lib.util.match]
+   [metabase.models.field :as field]
+   [metabase.models.interface :as mi]
+   [metabase.models.visualization-settings :as mb.viz]
+   [metabase.util :as u]
+   [toucan2.core :as t2]))
+
+(set! *warn-on-reflection* true)
 
 (def ^:const ^Long serialization-protocol-version
   "Current serialization protocol version.
@@ -32,6 +21,10 @@
   This gets stored with each dump, so we can correctly recover old dumps."
   ;; version 2 - start adding namespace portion to /collections/ paths
   2)
+
+(def ^:dynamic *include-entity-id*
+  "If entity_id should be included in v1 serialization dump"
+  false)
 
 (def ^:private ^{:arglists '([form])} mbql-entity-reference?
   "Is given form an MBQL entity reference?"
@@ -41,88 +34,87 @@
   [mbql]
   (-> mbql
       mbql.normalize/normalize-tokens
-      (mbql.util/replace
+      (lib.util.match/replace
         ;; `integer?` guard is here to make the operation idempotent
         [:field (id :guard integer?) opts]
-        [:field (fully-qualified-name Field id) (mbql-id->fully-qualified-name opts)]
+        [:field (fully-qualified-name :model/Field id) (mbql-id->fully-qualified-name opts)]
 
         ;; field-id is still used within parameter mapping dimensions
         ;; example relevant clause - [:dimension [:fk-> [:field-id 1] [:field-id 2]]]
         [:field-id (id :guard integer?)]
-        [:field-id (fully-qualified-name Field id)]
+        [:field-id (fully-qualified-name :model/Field id)]
 
         ;; source-field is also used within parameter mapping dimensions
         ;; example relevant clause - [:field 2 {:source-field 1}]
         {:source-field (id :guard integer?)}
-        (assoc &match :source-field (fully-qualified-name Field id))
-
-        [:metric (id :guard integer?)]
-        [:metric (fully-qualified-name Metric id)]
+        (assoc &match :source-field (fully-qualified-name :model/Field id))
 
         [:segment (id :guard integer?)]
-        [:segment (fully-qualified-name Segment id)])))
+        [:segment (fully-qualified-name :model/Segment id)])))
 
 (defn- ids->fully-qualified-names
   [entity]
-  (mbql.util/replace entity
+  (lib.util.match/replace entity
     mbql-entity-reference?
     (mbql-id->fully-qualified-name &match)
 
     map?
     (as-> &match entity
       (m/update-existing entity :database (fn [db-id]
-                                            (if (= db-id mbql.s/saved-questions-virtual-database-id)
+                                            (if (= db-id lib.schema.id/saved-questions-virtual-database-id)
                                               "database/__virtual"
-                                              (fully-qualified-name Database db-id))))
-      (m/update-existing entity :card_id (partial fully-qualified-name Card)) ; attibutes that refer to db fields use _
-      (m/update-existing entity :card-id (partial fully-qualified-name Card)) ; template-tags use dash
+                                              (fully-qualified-name :model/Database db-id))))
+      (m/update-existing entity :card_id (partial fully-qualified-name :model/Card)) ; attibutes that refer to db fields use _
+      (m/update-existing entity :card-id (partial fully-qualified-name :model/Card)) ; template-tags use dash
       (m/update-existing entity :source-table (fn [source-table]
                                                 (if (and (string? source-table)
                                                          (str/starts-with? source-table "card__"))
-                                                  (fully-qualified-name Card (-> source-table
-                                                                                 (str/split #"__")
-                                                                                 second
-                                                                                 Integer/parseInt))
-                                                  (fully-qualified-name Table source-table))))
+                                                  (fully-qualified-name :model/Card (-> source-table
+                                                                                        (str/split #"__")
+                                                                                        second
+                                                                                        Integer/parseInt))
+                                                  (fully-qualified-name :model/Table source-table))))
       (m/update-existing entity :breakout (fn [breakout]
                                             (map mbql-id->fully-qualified-name breakout)))
       (m/update-existing entity :aggregation (fn [aggregation]
                                                (m/map-vals mbql-id->fully-qualified-name aggregation)))
       (m/update-existing entity :filter (fn [filter]
                                           (m/map-vals mbql-id->fully-qualified-name filter)))
-      (m/update-existing entity ::mb.viz/param-mapping-source (partial fully-qualified-name Field))
-      (m/update-existing entity :snippet-id (partial fully-qualified-name NativeQuerySnippet))
+      (m/update-existing entity ::mb.viz/param-mapping-source (partial fully-qualified-name :model/Field))
+      (m/update-existing entity :snippet-id (partial fully-qualified-name :model/NativeQuerySnippet))
       (m/map-vals ids->fully-qualified-names entity))))
 
 (defn- strip-crud
   "Removes unneeded fields that can either be reconstructed from context or are meaningless
    (eg. :created_at)."
   [entity]
-  (cond-> (dissoc entity :id :creator_id :created_at :updated_at :db_id :location
+  (cond-> (dissoc entity :id :creator_id :created_at :updated_at :db_id :location :last_used_at
                   :dashboard_id :fields_hash :personal_owner_id :made_public_by_id :collection_id
-                  :pulse_id :result_metadata)
-    (some #(instance? % entity) (map type [Metric Field Segment])) (dissoc :table_id)))
+                  :pulse_id :result_metadata :action_id)
+    (not *include-entity-id*)   (dissoc :entity_id)
+    (some #(instance? % entity) (map type [:model/Field :model/Segment])) (dissoc :table_id)))
 
 (defmulti ^:private serialize-one
-  type)
+  {:arglists '([instance])}
+  mi/model)
 
 (def ^{:arglists '([entity])} serialize
   "Serialize entity `entity`."
   (comp ids->fully-qualified-names strip-crud serialize-one))
 
 (defmethod serialize-one :default
-  [entity]
-  entity)
+  [instance]
+  instance)
 
-(defmethod serialize-one (type Database)
+(defmethod serialize-one :model/Database
   [db]
   (dissoc db :features))
 
-(defmethod serialize-one (type Field)
+(defmethod serialize-one :model/Field
   [field]
   (let [field (-> field
-                  (update :parent_id (partial fully-qualified-name Field))
-                  (update :fk_target_field_id (partial fully-qualified-name Field)))]
+                  (update :parent_id (partial fully-qualified-name :model/Field))
+                  (update :fk_target_field_id (partial fully-qualified-name :model/Field)))]
     (if (contains? field :values)
       (update field :values u/select-non-nil-keys [:values :human_readable_values])
       (assoc field :values (-> field
@@ -131,7 +123,7 @@
 
 (defn- convert-column-settings-key [k]
   (if-let [field-id (::mb.viz/field-id k)]
-    (-> (db/select-one Field :id field-id)
+    (-> (t2/select-one :model/Field :id field-id)
         fully-qualified-name
         mb.viz/field-str->column-ref)
     k))
@@ -157,13 +149,13 @@
     nil
     (reduce-kv (fn [acc k v]
                  (assoc acc (convert-param-mapping-key k)
-                            (convert-param-mapping-val nil v))) {} param-mapping)))
+                        (convert-param-mapping-val nil v))) {} param-mapping)))
 
 (defn- convert-click-behavior [{:keys [::mb.viz/link-type ::mb.viz/link-target-id] :as click}]
   (-> (if-let [new-target-id (case link-type
-                               ::mb.viz/card      (-> (Card link-target-id)
+                               ::mb.viz/card      (-> (t2/select-one :model/Card :id link-target-id)
                                                       fully-qualified-name)
-                               ::mb.viz/dashboard (-> (Dashboard link-target-id)
+                               ::mb.viz/dashboard (-> (t2/select-one :model/Dashboard :id link-target-id)
                                                       fully-qualified-name)
                                nil)]
         (assoc click ::mb.viz/link-target-id new-target-id)
@@ -186,58 +178,51 @@
 
 (defn- dashboard-cards-for-dashboard
   [dashboard]
-  (let [dashboard-cards   (db/select DashboardCard :dashboard_id (u/the-id dashboard))
+  (let [dashboard-cards   (t2/select :model/DashboardCard :dashboard_id (u/the-id dashboard))
         series            (when (not-empty dashboard-cards)
-                            (db/select DashboardCardSeries
-                              :dashboardcard_id [:in (map u/the-id dashboard-cards)]))]
+                            (t2/select :model/DashboardCardSeries
+                                       :dashboardcard_id [:in (map u/the-id dashboard-cards)]))]
     (for [dashboard-card dashboard-cards]
       (-> dashboard-card
           (assoc :series (for [series series
                                :when (= (:dashboardcard_id series) (u/the-id dashboard-card))]
                            (-> series
-                               (update :card_id (partial fully-qualified-name Card))
+                               (update :card_id (partial fully-qualified-name :model/Card))
                                (dissoc :id :dashboardcard_id))))
           (assoc :visualization_settings (convert-viz-settings (:visualization_settings dashboard-card)))
           strip-crud))))
 
-(defmethod serialize-one (type Dashboard)
+(defmethod serialize-one :model/Dashboard
   [dashboard]
   (assoc dashboard :dashboard_cards (dashboard-cards-for-dashboard dashboard)))
 
-(defmethod serialize-one (type Card)
+(defmethod serialize-one :model/Card
   [card]
   (-> card
-      (m/update-existing :table_id (partial fully-qualified-name Table))
-      (update :database_id (partial fully-qualified-name Database))
+      (m/update-existing :table_id (partial fully-qualified-name :model/Table))
+      (update :database_id (partial fully-qualified-name :model/Database))
       (m/update-existing :visualization_settings convert-viz-settings)))
 
-(defmethod serialize-one (type Pulse)
+(defmethod serialize-one :model/Pulse
   [pulse]
   (assoc pulse
-    :cards    (for [card (db/select PulseCard :pulse_id (u/the-id pulse))]
-                (-> card
-                    (dissoc :id :pulse_id)
-                    (update :card_id (partial fully-qualified-name Card))))
-    :channels (for [channel (db/select PulseChannel :pulse_id (u/the-id pulse))]
-                (strip-crud channel))))
+         :cards    (for [card (t2/select :model/PulseCard :pulse_id (u/the-id pulse))]
+                     (-> card
+                         (dissoc :id :pulse_id)
+                         (update :card_id (partial fully-qualified-name :model/Card))))
+         :channels (for [channel (t2/select :model/PulseChannel :pulse_id (u/the-id pulse))]
+                     (strip-crud channel))))
 
-(defmethod serialize-one (type User)
+(defmethod serialize-one :model/User
   [user]
   (select-keys user [:first_name :last_name :email :is_superuser]))
 
-(defmethod serialize-one (type Dimension)
+(defmethod serialize-one :model/Dimension
   [dimension]
   (-> dimension
-      (update :field_id (partial fully-qualified-name Field))
-      (update :human_readable_field_id (partial fully-qualified-name Field))))
+      (update :field_id (partial fully-qualified-name :model/Field))
+      (update :human_readable_field_id (partial fully-qualified-name :model/Field))))
 
-(defmethod serialize-one (type Dependency)
-  [dependency]
-  (-> dependency
-      (select-keys [:dependent_on_id :model_id])
-      (update :dependent_on_id (partial fully-qualified-name (-> dependency :dependent_on_model symbol)))
-      (update :model_id (partial fully-qualified-name (-> dependency :model symbol)))))
-
-(defmethod serialize-one (type NativeQuerySnippet)
+(defmethod serialize-one :model/NativeQuerySnippet
   [snippet]
   (select-keys snippet [:name :description :content]))

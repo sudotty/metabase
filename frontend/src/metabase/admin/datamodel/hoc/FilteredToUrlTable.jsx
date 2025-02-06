@@ -1,18 +1,22 @@
 /* eslint-disable react/prop-types */
-import React from "react";
-import { connect } from "react-redux";
-import { push } from "react-router-redux";
 import cx from "classnames";
+import { Component } from "react";
+import { push } from "react-router-redux";
 import { t } from "ttag";
 
+import { FieldSet } from "metabase/components/FieldSet";
+import CS from "metabase/css/core/index.css";
 import Tables from "metabase/entities/tables";
-import Icon from "metabase/components/Icon";
-import FieldSet from "metabase/components/FieldSet";
+import { connect } from "metabase/lib/redux";
 import { DatabaseSchemaAndTableDataSelector } from "metabase/query_builder/components/DataSelector";
+import { Icon } from "metabase/ui";
 
+/**
+ * @deprecated HOCs are deprecated
+ */
 const FilteredToUrlTable = propName => ComposedComponent =>
   connect(null, { push })(
-    class FilteredToUrlTable extends React.Component {
+    class FilteredToUrlTable extends Component {
       constructor(props) {
         super(props);
         const { table } = props.location.query || {};
@@ -47,41 +51,42 @@ const FilteredToUrlTable = propName => ComposedComponent =>
 
 export default FilteredToUrlTable;
 
-@Tables.load({
-  id: (state, props) => props.tableId,
-  loadingAndErrorWrapper: false,
-})
-class TableSelector extends React.Component {
+class TableSelectorInner extends Component {
   render() {
     const { table, tableId, setTableId } = this.props;
     return (
       <FieldSet
         noPadding
-        className={cx("p0", { "border-brand": tableId != null })}
+        className={cx(CS.p0, { [CS.borderBrand]: tableId != null })}
       >
-        <div className="p2" style={{ width: 200 }}>
+        <div className={CS.p2} style={{ width: 200 }}>
           <DatabaseSchemaAndTableDataSelector
             selectedTableId={tableId}
             setSourceTableFn={setTableId}
             triggerElement={
-              tableId == null ? (
-                <span className="flex align-center justify-between flex-full text-medium text-bold">
-                  {t`Filter by table`}
-                  <Icon name="chevrondown" size={12} />
-                </span>
-              ) : (
-                <span className="flex align-center justify-between flex-full text-brand text-bold">
-                  {table && table.displayName()}
-                  <Icon
-                    name="close"
-                    onClick={e => {
+              <span
+                className={cx(
+                  CS.flex,
+                  CS.alignCenter,
+                  CS.justifyBetween,
+                  CS.flexFull,
+                  CS.textMedium,
+                  CS.textBold,
+                )}
+                data-testid="segment-list-table"
+              >
+                {table ? table.displayName() : t`Filter by table`}
+                <Icon
+                  name={table ? "close" : "chevrondown"}
+                  size={12}
+                  onClick={e => {
+                    if (table) {
                       e.stopPropagation();
                       setTableId(null);
-                    }}
-                    size={12}
-                  />
-                </span>
-              )
+                    }
+                  }}
+                />
+              </span>
             }
           />
         </div>
@@ -89,3 +94,8 @@ class TableSelector extends React.Component {
     );
   }
 }
+
+const TableSelector = Tables.load({
+  id: (state, props) => props.tableId,
+  loadingAndErrorWrapper: false,
+})(TableSelectorInner);

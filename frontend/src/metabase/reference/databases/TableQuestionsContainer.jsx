@@ -1,23 +1,24 @@
 /* eslint "react/prop-types": "warn" */
-import React, { Component } from "react";
+import cx from "classnames";
 import PropTypes from "prop-types";
-import { connect } from "react-redux";
+import { Component } from "react";
 
-import TableSidebar from "./TableSidebar";
 import SidebarLayout from "metabase/components/SidebarLayout";
-
-import TableQuestions from "metabase/reference/databases/TableQuestions";
+import CS from "metabase/css/core/index.css";
+import Questions from "metabase/entities/questions";
+import { connect } from "metabase/lib/redux";
 import * as metadataActions from "metabase/redux/metadata";
+import TableQuestions from "metabase/reference/databases/TableQuestions";
 import * as actions from "metabase/reference/reference";
 
 import {
   getDatabase,
-  getTable,
   getDatabaseId,
   getIsEditing,
+  getTable,
 } from "../selectors";
 
-import Questions from "metabase/entities/questions";
+import TableSidebar from "./TableSidebar";
 
 const mapStateToProps = (state, props) => ({
   database: getDatabase(state, props),
@@ -32,8 +33,7 @@ const mapDispatchToProps = {
   ...actions,
 };
 
-@connect(mapStateToProps, mapDispatchToProps)
-export default class TableQuestionsContainer extends Component {
+class TableQuestionsContainer extends Component {
   static propTypes = {
     params: PropTypes.object.isRequired,
     location: PropTypes.object.isRequired,
@@ -67,7 +67,7 @@ export default class TableQuestionsContainer extends Component {
 
     return (
       <SidebarLayout
-        className="flex-full relative"
+        className={cx(CS.flexFull, CS.relative)}
         style={isEditing ? { paddingTop: "43px" } : {}}
         sidebar={<TableSidebar database={database} table={table} />}
       >
@@ -76,3 +76,8 @@ export default class TableQuestionsContainer extends Component {
     );
   }
 }
+
+export default connect(
+  mapStateToProps,
+  mapDispatchToProps,
+)(TableQuestionsContainer);

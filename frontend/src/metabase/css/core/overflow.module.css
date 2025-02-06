@@ -1,0 +1,15 @@
+.overflowAuto {
+  overflow: auto;
+}
+
+.overflowYAuto {
+  overflow-y: auto;
+}
+
+.overflowHidden {
+  overflow: hidden;
+}
+
+.overflowYScroll {
+  overflow-y: scroll;
+}

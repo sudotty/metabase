@@ -1,9 +1,10 @@
-import React from "react";
 import PropTypes from "prop-types";
+import { Component } from "react";
+import _ from "underscore";
 
 import Button from "metabase/core/components/Button";
+import CS from "metabase/css/core/index.css";
 
-import _ from "underscore";
 import { AuditParametersInput } from "./AuditParameters.styled";
 
 const DEBOUNCE_PERIOD = 300;
@@ -26,7 +27,7 @@ const propTypes = {
   hasResults: PropTypes.bool,
 };
 
-export default class AuditParameters extends React.Component {
+export default class AuditParameters extends Component {
   constructor(props) {
     super(props);
     this.state = {
@@ -59,7 +60,7 @@ export default class AuditParameters extends React.Component {
 
     return (
       <div>
-        <div className="pt4">
+        <div className={CS.pt4}>
           {parameters.map(({ key, placeholder, icon, disabled }) => (
             <AuditParametersInput
               key={key}
@@ -67,15 +68,15 @@ export default class AuditParameters extends React.Component {
               value={inputValues[key] || ""}
               placeholder={placeholder}
               disabled={isEmpty || disabled}
-              onChange={value => {
-                this.changeValue(key, value);
+              onChange={e => {
+                this.changeValue(key, e.target.value);
               }}
               icon={icon}
             />
           ))}
           {buttons?.map(({ key, label, disabled, onClick }) => (
             <Button
-              className="ml2"
+              className={CS.ml2}
               key={key}
               primary
               disabled={isEmpty || disabled}

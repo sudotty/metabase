@@ -1,12 +1,16 @@
-import React, { ComponentType, useCallback, useMemo, useState } from "react";
+import type { ComponentType } from "react";
+import { useCallback, useState } from "react";
 import { jt, t } from "ttag";
-import Settings from "metabase/lib/settings";
+
+import { useDocsUrl } from "metabase/common/hooks";
+import Modal from "metabase/components/Modal";
 import Button from "metabase/core/components/Button";
 import ExternalLink from "metabase/core/components/ExternalLink";
-import Modal from "metabase/components/Modal";
-import SlackBadge from "../SlackBadge";
+
 import SlackAppsLink from "../SlackAppsLink";
+import SlackBadge from "../SlackBadge";
 import SlackDeleteModal from "../SlackDeleteModal";
+
 import {
   StatusFooter,
   StatusHeader,
@@ -39,9 +43,7 @@ const SlackStatus = ({
     setIsOpened(false);
   }, []);
 
-  const docsUrl = useMemo(() => {
-    return Settings.docsUrl("administration-guide/09-setting-up-slack");
-  }, []);
+  const { url: docsUrl } = useDocsUrl("configuring-metabase/slack");
 
   return (
     <StatusRoot>
@@ -53,7 +55,10 @@ const SlackStatus = ({
             {!isValid && (
               <StatusMessageText>
                 {jt`Need help? ${(
-                  <ExternalLink href={docsUrl}>{t`See our docs`}</ExternalLink>
+                  <ExternalLink
+                    key="link"
+                    href={docsUrl}
+                  >{t`See our docs`}</ExternalLink>
                 )}.`}
               </StatusMessageText>
             )}
@@ -68,7 +73,7 @@ const SlackStatus = ({
         <Button onClick={handleOpen}>{t`Delete Slack App`}</Button>
       </StatusFooter>
       {isOpened && (
-        <Modal isOpen={isOpened} full={false} onClose={handleClose}>
+        <Modal isOpen={isOpened} onClose={handleClose}>
           <SlackDeleteModal onDelete={onDelete} onClose={handleClose} />
         </Modal>
       )}
@@ -76,4 +81,5 @@ const SlackStatus = ({
   );
 };
 
+// eslint-disable-next-line import/no-default-export -- deprecated usage
 export default SlackStatus;

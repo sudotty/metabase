@@ -1,35 +1,35 @@
-import styled from "@emotion/styled";
-import Button from "metabase/core/components/Button";
-import { color, alpha } from "metabase/lib/colors";
+import cx from "classnames";
+import type { CSSProperties } from "react";
 
-type Props = {
-  active?: boolean;
+import Button, { type ButtonProps } from "metabase/core/components/Button";
+import { useMantineTheme } from "metabase/ui";
+
+import S from "./ViewButton.module.css";
+
+interface Props extends ButtonProps {
   color?: string;
-};
+  active?: boolean;
+}
 
 // NOTE: some of this is duplicated from NotebookCell.jsx
-const ViewButton = styled(Button)<Props>`
-  background-color: ${({ active, color = getDefaultColor() }) =>
-    active ? color : alpha(color, 0.2)};
+const ViewButton = ({ className, active, color, ...props }: Props) => {
+  const theme = useMantineTheme();
 
-  color: ${({ active, color = getDefaultColor() }) =>
-    active ? "white" : color};
+  return (
+    <Button
+      classNames={{
+        root: cx(S.ViewButton, { [S.active]: active }, className),
+        icon: S.ViewButtonIcon,
+      }}
+      style={
+        {
+          "--view-button-color": color ?? theme.fn.themeColor("brand"),
+        } as CSSProperties
+      }
+      {...props}
+    />
+  );
+};
 
-  border: none;
-  transition: background 300ms linear, border 300ms linear;
-
-  &:hover {
-    background-color: ${({ active, color = getDefaultColor() }) =>
-      active ? alpha(color, 0.8) : alpha(color, 0.35)};
-    color: ${({ active, color = getDefaultColor() }) =>
-      active ? "white" : color};
-  }
-
-  > .Icon {
-    opacity: 0.6;
-  }
-`;
-
-const getDefaultColor = () => color("brand");
-
+// eslint-disable-next-line import/no-default-export -- deprecated usage
 export default ViewButton;

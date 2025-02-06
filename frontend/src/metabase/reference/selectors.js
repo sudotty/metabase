@@ -1,43 +1,27 @@
-import { createSelector } from "reselect";
-import { assoc, getIn } from "icepick";
+import { createSelector } from "@reduxjs/toolkit";
+import { getIn } from "icepick";
 
 import Dashboards from "metabase/entities/dashboards";
-
-import * as Query from "metabase/lib/query/query";
-import * as Filter from "metabase/lib/query/filter";
-import * as Aggregation from "metabase/lib/query/aggregation";
-
 import { resourceListToMap } from "metabase/lib/redux";
-
-import { idsToObjectMap, databaseToForeignKeys } from "./utils";
-
-// import { getDatabases, getTables, getFields, getMetrics, getSegments } from "metabase/selectors/metadata";
-
 import {
   getShallowDatabases as getDatabases,
-  getShallowTables as getTables,
   getShallowFields as getFields,
-  getShallowMetrics as getMetrics,
   getShallowSegments as getSegments,
+  getShallowTables as getTables,
 } from "metabase/selectors/metadata";
+
+import { databaseToForeignKeys, idsToObjectMap } from "./utils";
+
+// import { getDatabases, getTables, getFields, getSegments } from "metabase/selectors/metadata";
+
 export {
   getShallowDatabases as getDatabases,
   getShallowTables as getTables,
   getShallowFields as getFields,
-  getShallowMetrics as getMetrics,
   getShallowSegments as getSegments,
 } from "metabase/selectors/metadata";
 
-import _ from "underscore";
-
 export const getUser = (state, props) => state.currentUser;
-
-export const getMetricId = (state, props) =>
-  Number.parseInt(props.params.metricId);
-export const getMetric = createSelector(
-  [getMetricId, getMetrics],
-  (metricId, metrics) => metrics[metricId] || { id: metricId },
-);
 
 export const getSegmentId = (state, props) =>
   Number.parseInt(props.params.segmentId);
@@ -69,28 +53,14 @@ export const getTableBySegment = createSelector(
   (segment, tables) =>
     segment && segment.table_id ? tables[segment.table_id] : {},
 );
-const getTableByMetric = createSelector(
-  [getMetric, getTables],
-  (metric, tables) =>
-    metric && metric.table_id ? tables[metric.table_id] : {},
-);
 export const getTable = createSelector(
-  [
-    getTableId,
-    getTables,
-    getMetricId,
-    getTableByMetric,
-    getSegmentId,
-    getTableBySegment,
-  ],
-  (tableId, tables, metricId, tableByMetric, segmentId, tableBySegment) =>
+  [getTableId, getTables, getSegmentId, getTableBySegment],
+  (tableId, tables, segmentId, tableBySegment) =>
     tableId
       ? tables[tableId] || { id: tableId }
-      : metricId
-      ? tableByMetric
       : segmentId
-      ? tableBySegment
-      : {},
+        ? tableBySegment
+        : {},
 );
 
 export const getFieldId = (state, props) =>
@@ -117,45 +87,11 @@ export const getFieldBySegment = createSelector(
 const getQuestions = (state, props) =>
   getIn(state, ["entities", "questions"]) || {};
 
-export const getMetricQuestions = createSelector(
-  [getMetricId, getQuestions],
-  (metricId, questions) =>
-    Object.values(questions)
-      .filter(
-        question =>
-          question.dataset_query.type === "query" &&
-          _.any(
-            Query.getAggregations(question.dataset_query.query),
-            aggregation => Aggregation.getMetric(aggregation) === metricId,
-          ),
-      )
-      .reduce((map, question) => assoc(map, question.id, question), {}),
-);
-
 const getRevisions = (state, props) => state.revisions;
-
-export const getMetricRevisions = createSelector(
-  [getMetricId, getRevisions],
-  (metricId, revisions) => getIn(revisions, ["metric", metricId]) || {},
-);
 
 export const getSegmentRevisions = createSelector(
   [getSegmentId, getRevisions],
   (segmentId, revisions) => getIn(revisions, ["segment", segmentId]) || {},
-);
-
-export const getSegmentQuestions = createSelector(
-  [getSegmentId, getQuestions],
-  (segmentId, questions) =>
-    Object.values(questions)
-      .filter(
-        question =>
-          question.dataset_query.type === "query" &&
-          Query.getFilters(question.dataset_query.query).some(
-            filter => Filter.isSegment(filter) && filter[1] === segmentId,
-          ),
-      )
-      .reduce((map, question) => assoc(map, question.id, question), {}),
 );
 
 export const getTableQuestions = createSelector(

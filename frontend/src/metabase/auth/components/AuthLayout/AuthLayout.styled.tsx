@@ -1,9 +1,12 @@
 import styled from "@emotion/styled";
-import { color } from "metabase/lib/colors";
+
+import { hueRotate } from "metabase/lib/colors";
+import { breakpointMinSmall } from "metabase/styled-components/theme";
 
 export const LayoutRoot = styled.div`
   position: relative;
   min-height: 100vh;
+  background-color: var(--mb-color-bg-light);
 `;
 
 export const LayoutBody = styled.div`
@@ -12,46 +15,39 @@ export const LayoutBody = styled.div`
   justify-content: center;
   align-items: center;
   position: relative;
-  padding: 0 1rem 2rem;
+  padding: 1.5rem 1rem 3rem;
   min-height: 100vh;
 `;
 
 export const LayoutCard = styled.div`
-  width: 30.875rem;
+  width: 100%;
   margin-top: 1.5rem;
-  padding: 2.5rem 3.5rem;
-  background-color: ${color("white")};
-  box-shadow: 0 1px 15px ${color("shadow")};
+  padding: 2.5rem 1.5rem;
+  background-color: var(--mb-color-bg-white);
+  box-shadow: 0 1px 15px var(--mb-color-shadow);
   border-radius: 6px;
+
+  ${breakpointMinSmall} {
+    width: 30.875rem;
+    padding: 2.5rem 3.5rem;
+  }
 `;
 
-export const LayoutScene = styled.div`
+export const LayoutIllustration = styled.div<{
+  backgroundImageSrc: string;
+  isDefault: boolean;
+}>`
   position: absolute;
+  top: 0;
   left: 0;
-  right: 0;
-  bottom: 0;
-  overflow: hidden;
-`;
-
-export const LayoutSceneImage = styled.img`
-  position: relative;
-  left: -1240px;
-  bottom: -3px;
-
-  @media screen and (min-width: 800px) {
-    left: -1040px;
-  }
-
-  @media screen and (min-width: 1200px) {
-    left: -840px;
-  }
-
-  @media screen and (min-width: 1600px) {
-    left: -640px;
-  }
-
-  @media screen and (min-width: 1920px) {
-    left: 0;
-    width: 100%;
-  }
+  width: 100%;
+  height: 100%;
+  filter: ${({ isDefault }) =>
+    isDefault && `hue-rotate(${hueRotate("brand")}deg)`};
+  background-image: ${({ backgroundImageSrc }) =>
+    `url("${backgroundImageSrc}")`};
+  background-size: ${({ isDefault }) =>
+    isDefault ? "max(2592px, 100%) auto" : "100% auto"};
+  background-repeat: no-repeat;
+  background-position: right bottom;
 `;

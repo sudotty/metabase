@@ -1,17 +1,21 @@
 (ns metabase.driver.druid.execute
-  (:require [cheshire.core :as json]
-            [clojure.math.numeric-tower :as math]
-            [java-time :as t]
-            [medley.core :as m]
-            [metabase.driver.druid.query-processor :as druid.qp]
-            [metabase.query-processor.error-type :as qp.error-type]
-            [metabase.query-processor.middleware.annotate :as annotate]
-            [metabase.query-processor.store :as qp.store]
-            [metabase.query-processor.timezone :as qp.timezone]
-            [metabase.util :as u]
-            [metabase.util.date-2 :as u.date]
-            [metabase.util.i18n :refer [tru]]
-            [schema.core :as s]))
+  (:require
+   [clojure.math.numeric-tower :as math]
+   [java-time.api :as t]
+   [medley.core :as m]
+   [metabase.driver.druid.query-processor :as druid.qp]
+   [metabase.lib.metadata :as lib.metadata]
+   [metabase.query-processor.error-type :as qp.error-type]
+   [metabase.query-processor.middleware.annotate :as annotate]
+   [metabase.query-processor.store :as qp.store]
+   [metabase.query-processor.timezone :as qp.timezone]
+   [metabase.util :as u]
+   [metabase.util.date-2 :as u.date]
+   [metabase.util.i18n :refer [tru]]
+   [metabase.util.json :as json]
+   [metabase.util.malli :as mu]))
+
+(set! *warn-on-reflection* true)
 
 (defn- resolve-timezone
   "Returns the timezone object (either report-timezone or JVM timezone). Returns nil if the timezone is UTC as the
@@ -41,7 +45,7 @@
 ;;
 ;; We can remove this at some point in the future when everyone is using Druid 0.17.0 or above.
 (defmethod post-process ::druid.qp/select
-  [_ projections _ [{{:keys [events]} :result} first-result]]
+  [_ projections _ [{{:keys [events]} :result}]]
   {:projections projections
    :results     (for [event (map :event events)]
                   (update event :timestamp u.date/parse))})
@@ -77,14 +81,15 @@
                   (for [event results]
                     (merge {:timestamp (ts-getter event)} (:result event))))})
 
-(s/defn ^:private col-names->getter-fns :- [(s/cond-pre s/Keyword (s/pred fn?))]
+(mu/defn- col-names->getter-fns :- [:sequential [:or :keyword fn?]]
   "Given a sequence of `columns` keywords, return a sequence of appropriate getter functions to get values from a single
   result row. Normally, these are just the keyword column names themselves, but for `:timestamp___int`, we'll also
   parse the result as an integer (for further explanation, see the docstring for
   `units-that-need-post-processing-int-parsing`). We also round `:distinct___count` in order to return an integer
   since Druid returns the approximate floating point value for cardinality queries (See Druid documentation regarding
   cardinality and HLL)."
-  [actual-col-names :- [s/Keyword], annotate-col-names :- [s/Keyword]]
+  [actual-col-names   :- [:sequential :keyword]
+   annotate-col-names :- [:sequential :keyword]]
   (let [annotate-col-names (set annotate-col-names)]
     (filter
      some?
@@ -115,8 +120,8 @@
   (let [getters (vec (col-names->getter-fns actual-col-names annotate-col-names))]
     (when-not (seq getters)
       (throw (ex-info (tru "Don''t know how to retrieve results for columns {0}" (pr-str actual-col-names))
-               {:type    qp.error-type/driver
-                :results results})))
+                      {:type    qp.error-type/driver
+                       :results results})))
     (map (apply juxt getters) rows)))
 
 (defn- remove-bonus-keys
@@ -125,7 +130,7 @@
   (vec (remove #(re-find #"^___" (name %)) columns)))
 
 (defn- reduce-results
-  [{{:keys [query mbql?]} :native, :as outer-query} {:keys [projections], :as result} respond]
+  [{{:keys [mbql?]} :native, :as outer-query} {:keys [projections], :as result} respond]
   (let [col-names          (if mbql?
                              (->> projections
                                   remove-bonus-keys
@@ -143,22 +148,21 @@
 (defn execute-reducible-query
   "Execute a query for a Druid DB."
   [execute*
-   {database-id                                  :database
-    {:keys [query query-type mbql? projections]} :native
-    middleware                                   :middleware
-    :as                                          mbql-query}
+   {{:keys [query query-type projections]} :native
+    middleware                             :middleware
+    :as                                    mbql-query}
    respond]
   {:pre [query]}
-  (let [details    (:details (qp.store/database))
+  (let [details    (:details (lib.metadata/database (qp.store/metadata-provider)))
         query      (if (string? query)
-                     (json/parse-string query keyword)
+                     (json/decode+kw query)
                      query)
         query-type (or query-type
                        (keyword (namespace ::druid.qp/query) (name (:queryType query))))
         results    (try
                      (execute* details query)
                      (catch Throwable e
-                       (throw (ex-info (tru "Error executing query")
+                       (throw (ex-info (tru "Error executing query: {0}" (ex-message e))
                                        {:type  qp.error-type/db
                                         :query query}
                                        e))))

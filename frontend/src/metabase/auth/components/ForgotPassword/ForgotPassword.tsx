@@ -1,12 +1,16 @@
-import React, { useCallback, useMemo, useState } from "react";
+import type { Location } from "history";
+import { useCallback, useState } from "react";
 import { t } from "ttag";
-import Users from "metabase/entities/users";
-import AuthLayout from "../../containers/AuthLayout";
-import { ForgotPasswordData } from "../../types";
+
+import Button from "metabase/core/components/Button";
+import { useDispatch, useSelector } from "metabase/lib/redux";
+
+import { forgotPassword } from "../../actions";
+import { getIsEmailConfigured, getIsLdapEnabled } from "../../selectors";
+import { AuthLayout } from "../AuthLayout";
+import { ForgotPasswordForm } from "../ForgotPasswordForm";
+
 import {
-  FormFooter,
-  FormLink,
-  FormTitle,
   InfoBody,
   InfoIcon,
   InfoIconContainer,
@@ -16,27 +20,33 @@ import {
 
 type ViewType = "form" | "disabled" | "success";
 
-export interface ForgotPasswordProps {
-  canResetPassword: boolean;
-  initialEmail?: string;
-  onResetPassword: (email: string) => void;
+interface ForgotPasswordQueryString {
+  email?: string;
 }
 
-const ForgotPassword = ({
-  canResetPassword,
-  initialEmail,
-  onResetPassword,
+interface ForgotPasswordProps {
+  location?: Location<ForgotPasswordQueryString>;
+}
+
+export const ForgotPassword = ({
+  location,
 }: ForgotPasswordProps): JSX.Element => {
+  const isEmailConfigured = useSelector(getIsEmailConfigured);
+  const isLdapEnabled = useSelector(getIsLdapEnabled);
+  const canResetPassword = isEmailConfigured && !isLdapEnabled;
+  const initialEmail = location?.query?.email;
+
   const [view, setView] = useState<ViewType>(
     canResetPassword ? "form" : "disabled",
   );
+  const dispatch = useDispatch();
 
   const handleSubmit = useCallback(
     async (email: string) => {
-      await onResetPassword(email);
+      await dispatch(forgotPassword(email)).unwrap();
       setView("success");
     },
-    [onResetPassword],
+    [dispatch],
   );
 
   return (
@@ -53,43 +63,6 @@ const ForgotPassword = ({
   );
 };
 
-interface ForgotPasswordFormProps {
-  initialEmail?: string;
-  onSubmit: (email: string) => void;
-}
-
-const ForgotPasswordForm = ({
-  initialEmail,
-  onSubmit,
-}: ForgotPasswordFormProps): JSX.Element => {
-  const initialValues = useMemo(() => {
-    return { email: initialEmail };
-  }, [initialEmail]);
-
-  const handleSubmit = useCallback(
-    async ({ email }: ForgotPasswordData) => {
-      await onSubmit(email);
-    },
-    [onSubmit],
-  );
-
-  return (
-    <div>
-      <FormTitle>{t`Forgot password`}</FormTitle>
-      <Users.Form
-        form={Users.forms.password_forgot}
-        initialValues={initialValues}
-        submitTitle={t`Send password reset email`}
-        submitFullWidth
-        onSubmit={handleSubmit}
-      />
-      <FormFooter>
-        <FormLink to={"/auth/login"}>{t`Back to sign in`}</FormLink>
-      </FormFooter>
-    </div>
-  );
-};
-
 const ForgotPasswordSuccess = (): JSX.Element => {
   return (
     <InfoBody>
@@ -99,10 +72,7 @@ const ForgotPasswordSuccess = (): JSX.Element => {
       <InfoMessage>
         {t`Check your email for instructions on how to reset your password.`}
       </InfoMessage>
-      <InfoLink
-        className="Button Button--primary"
-        to={"/auth/login"}
-      >{t`Back to sign in`}</InfoLink>
+      <Button primary as="a" href="/auth/login">{t`Back to sign in`}</Button>
     </InfoBody>
   );
 };
@@ -113,9 +83,7 @@ const ForgotPasswordDisabled = (): JSX.Element => {
       <InfoMessage>
         {t`Please contact an administrator to have them reset your password.`}
       </InfoMessage>
-      <InfoLink to={"/auth/login"}>{t`Back to sign in`}</InfoLink>
+      <InfoLink to="/auth/login">{t`Back to sign in`}</InfoLink>
     </InfoBody>
   );
 };
-
-export default ForgotPassword;

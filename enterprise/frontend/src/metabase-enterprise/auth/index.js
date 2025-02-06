@@ -1,89 +1,97 @@
-import React from "react";
-import ExternalLink from "metabase/core/components/ExternalLink";
-import { t, jt } from "ttag";
-import { updateIn } from "icepick";
+/* eslint-disable react/prop-types */
 
-import { hasPremiumFeature } from "metabase-enterprise/settings";
+import { updateIn } from "icepick";
+import { t } from "ttag";
+import _ from "underscore";
+import * as Yup from "yup";
+
+import SettingHeader from "metabase/admin/settings/components/SettingHeader";
+import GroupMappingsWidget from "metabase/admin/settings/containers/GroupMappingsWidget";
+import { LOGIN, LOGIN_GOOGLE } from "metabase/auth/actions";
+import { FormSwitch } from "metabase/forms";
 import MetabaseSettings from "metabase/lib/settings";
 import {
-  PLUGIN_AUTH_PROVIDERS,
-  PLUGIN_SHOW_CHANGE_PASSWORD_CONDITIONS,
   PLUGIN_ADMIN_SETTINGS_UPDATES,
+  PLUGIN_AUTH_PROVIDERS,
+  PLUGIN_IS_PASSWORD_USER,
+  PLUGIN_LDAP_FORM_FIELDS,
+  PLUGIN_REDUX_MIDDLEWARES,
 } from "metabase/plugins";
-import { UtilApi } from "metabase/services";
+import { Stack } from "metabase/ui";
+import SessionTimeoutSetting from "metabase-enterprise/auth/components/SessionTimeoutSetting";
+import { hasPremiumFeature } from "metabase-enterprise/settings";
 
-import AuthenticationOption from "metabase/admin/settings/components/widgets/AuthenticationOption";
-import GroupMappingsWidget from "metabase/admin/settings/components/widgets/GroupMappingsWidget";
-import SecretKeyWidget from "metabase/admin/settings/components/widgets/SecretKeyWidget";
+import { createSessionMiddleware } from "../auth/middleware/session-middleware";
 
-import SettingsGoogleForm from "metabase/admin/settings/components/SettingsGoogleForm";
-import SettingsSAMLForm from "./components/SettingsSAMLForm";
 import SettingsJWTForm from "./components/SettingsJWTForm";
-
-import SSOButton from "./containers/SSOButton";
+import SettingsSAMLForm from "./components/SettingsSAMLForm";
+import { SsoButton } from "./components/SsoButton";
+import JwtAuthCard from "./containers/JwtAuthCard";
+import SamlAuthCard from "./containers/SamlAuthCard";
 
 PLUGIN_ADMIN_SETTINGS_UPDATES.push(sections =>
-  updateIn(sections, ["authentication", "settings"], settings => [
-    ...settings,
-    {
-      authName: t`SAML`,
-      authDescription: t`Allows users to login via a SAML Identity Provider.`,
-      authType: "saml",
-      authEnabled: settings => settings["saml-enabled"],
-      widget: AuthenticationOption,
-      getHidden: () => !hasPremiumFeature("sso"),
-    },
-    {
-      authName: t`JWT`,
-      authDescription: t`Allows users to login via a JWT Identity Provider.`,
-      authType: "jwt",
-      authEnabled: settings => settings["jwt-enabled"],
-      widget: AuthenticationOption,
-      getHidden: () => !hasPremiumFeature("sso"),
-    },
-    {
-      key: "enable-password-login",
-      display_name: t`Enable Password Authentication`,
-      description: t`When enabled, users can additionally log in with email and password.`,
-      type: "boolean",
-      getHidden: settings =>
-        !settings["google-auth-client-id"] &&
-        !settings["ldap-enabled"] &&
-        !settings["saml-enabled"] &&
-        !settings["jwt-enabled"],
-    },
-    {
-      key: "send-new-sso-user-admin-email?",
-      display_name: t`Notify admins of new SSO users`,
-      description: t`When enabled, administrators will receive an email the first time a user uses Single Sign-On.`,
-      type: "boolean",
-      getHidden: settings =>
-        !settings["google-auth-client-id"] &&
-        !settings["ldap-enabled"] &&
-        !settings["saml-enabled"] &&
-        !settings["jwt-enabled"],
-    },
-  ]),
+  updateIn(sections, ["authentication", "settings"], settings => {
+    const [apiKeySettings, otherSettings] = _.partition(
+      settings,
+      s => s.key === "api-keys",
+    );
+    return [
+      ...otherSettings,
+      {
+        key: "saml-enabled",
+        description: null,
+        noHeader: true,
+        widget: SamlAuthCard,
+        getHidden: () => !hasPremiumFeature("sso_saml"),
+        forceRenderWidget: true,
+      },
+      {
+        key: "jwt-enabled",
+        description: null,
+        noHeader: true,
+        widget: JwtAuthCard,
+        getHidden: () => !hasPremiumFeature("sso_jwt"),
+        forceRenderWidget: true,
+      },
+      ...apiKeySettings,
+      {
+        key: "enable-password-login",
+        display_name: t`Enable Password Authentication`,
+        description: t`When enabled, users can additionally log in with email and password.`,
+        type: "boolean",
+        getHidden: (_settings, derivedSettings) =>
+          !hasPremiumFeature("disable_password_login") ||
+          (!derivedSettings["google-auth-enabled"] &&
+            !derivedSettings["ldap-enabled"] &&
+            !derivedSettings["saml-enabled"] &&
+            !derivedSettings["jwt-enabled"]),
+      },
+      {
+        key: "session-timeout",
+        display_name: t`Session timeout`,
+        description: t`Time before inactive users are logged out.`,
+        widget: SessionTimeoutSetting,
+        getHidden: () => !hasPremiumFeature("session_timeout_config"),
+      },
+    ];
+  }),
 );
 
 PLUGIN_ADMIN_SETTINGS_UPDATES.push(sections => ({
   ...sections,
   "authentication/saml": {
-    sidebar: false,
+    getHidden: () => !hasPremiumFeature("sso_saml"),
     component: SettingsSAMLForm,
     settings: [
       {
         key: "saml-enabled",
-        display_name: t`SAML Authentication`,
-        description: jt`Use the settings below to configure your SSO via SAML. If you have any questions, check out our ${(
-          <ExternalLink
-            href={MetabaseSettings.docsUrl(
-              "enterprise-guide/authenticating-with-saml",
-            )}
-          >
-            {t`documentation`}
-          </ExternalLink>
-        )}.`,
+        getHidden: () => true,
+      },
+      {
+        key: "saml-user-provisioning-enabled?",
+        display_name: t`User Provisioning`,
+        // eslint-disable-next-line no-literal-metabase-strings -- This string only shows for admins.
+        description: t`When a user logs in via SAML, create a Metabase account for them automatically if they don't have one.`,
         type: "boolean",
       },
       {
@@ -92,7 +100,6 @@ PLUGIN_ADMIN_SETTINGS_UPDATES.push(sections => ({
         placeholder: "https://example.com/app/my_saml_app/abc123/sso/saml",
         type: "string",
         required: true,
-        autoFocus: true,
       },
       {
         key: "saml-identity-provider-issuer",
@@ -165,48 +172,36 @@ PLUGIN_ADMIN_SETTINGS_UPDATES.push(sections => ({
     ],
   },
   "authentication/jwt": {
-    sidebar: false,
     component: SettingsJWTForm,
+    getHidden: () => !hasPremiumFeature("sso_jwt"),
     settings: [
-      {
-        key: "jwt-enabled",
-        description: null,
-        getHidden: settings => settings["jwt-enabled"],
-        onChanged: async (
-          oldValue,
-          newValue,
-          settingsValues,
-          onChangeSetting,
-        ) => {
-          // Generate a secret key if none already exists
-          if (!oldValue && newValue && !settingsValues["jwt-shared-secret"]) {
-            const result = await UtilApi.random_token();
-            await onChangeSetting("jwt-shared-secret", result.token);
-          }
-        },
-      },
       {
         key: "jwt-enabled",
         display_name: t`JWT Authentication`,
         type: "boolean",
-        getHidden: settings => !settings["jwt-enabled"],
+      },
+      {
+        key: "jwt-user-provisioning-enabled?",
+        display_name: t`User Provisioning`,
+        // eslint-disable-next-line no-literal-metabase-strings -- This string only shows for admins.
+        description: t`When a user logs in via JWT, create a Metabase account for them automatically if they don't have one.`,
+        type: "boolean",
       },
       {
         key: "jwt-identity-provider-uri",
         display_name: t`JWT Identity Provider URI`,
         placeholder: "https://jwt.yourdomain.org",
         type: "string",
-        required: true,
+        required: false,
         autoFocus: true,
-        getHidden: settings => !settings["jwt-enabled"],
+        getHidden: (_, derivedSettings) => !derivedSettings["jwt-enabled"],
       },
       {
         key: "jwt-shared-secret",
         display_name: t`String used by the JWT signing key`,
         type: "text",
         required: true,
-        widget: SecretKeyWidget,
-        getHidden: settings => !settings["jwt-enabled"],
+        getHidden: (_, derivedSettings) => !derivedSettings["jwt-enabled"],
       },
       {
         key: "jwt-attribute-email",
@@ -227,12 +222,6 @@ PLUGIN_ADMIN_SETTINGS_UPDATES.push(sections => ({
         key: "jwt-group-sync",
         display_name: t`Synchronize group memberships`,
         description: null,
-        widget: GroupMappingsWidget,
-        props: {
-          mappingSetting: "jwt-group-mappings",
-          groupHeading: t`Group Name`,
-          groupPlaceholder: "Group Name",
-        },
       },
       {
         key: "jwt-group-mappings",
@@ -243,69 +232,81 @@ PLUGIN_ADMIN_SETTINGS_UPDATES.push(sections => ({
 
 const SSO_PROVIDER = {
   name: "sso",
-  Button: SSOButton,
+  Button: SsoButton,
 };
 
 PLUGIN_AUTH_PROVIDERS.push(providers => {
-  if (MetabaseSettings.get("other-sso-configured?")) {
+  if (
+    (hasPremiumFeature("sso_jwt") || hasPremiumFeature("sso_saml")) &&
+    MetabaseSettings.get("other-sso-enabled?")
+  ) {
     providers = [SSO_PROVIDER, ...providers];
   }
-  if (!MetabaseSettings.get("enable-password-login")) {
+  if (
+    hasPremiumFeature("disable_password_login") &&
+    !MetabaseSettings.isPasswordLoginEnabled() &&
+    !MetabaseSettings.isLdapEnabled()
+  ) {
     providers = providers.filter(p => p.name !== "password");
   }
   return providers;
 });
 
-PLUGIN_SHOW_CHANGE_PASSWORD_CONDITIONS.push(
-  user =>
-    !user.google_auth &&
-    !user.ldap_auth &&
-    MetabaseSettings.get("enable-password-login"),
-);
+if (hasPremiumFeature("disable_password_login")) {
+  PLUGIN_IS_PASSWORD_USER.push(
+    user =>
+      !user.google_auth &&
+      !user.ldap_auth &&
+      MetabaseSettings.isPasswordLoginEnabled(),
+  );
+}
 
-PLUGIN_ADMIN_SETTINGS_UPDATES.push(sections =>
-  updateIn(sections, ["authentication/ldap", "settings"], settings => [
-    ...settings,
-    {
-      key: "ldap-group-membership-filter",
-      display_name: t`Group membership filter`,
-      type: "string",
-      validations: [
-        value =>
-          (value.match(/\(/g) || []).length !==
-          (value.match(/\)/g) || []).length
-            ? t`Check your parentheses`
-            : null,
-      ],
+if (hasPremiumFeature("sso_ldap")) {
+  Object.assign(PLUGIN_LDAP_FORM_FIELDS, {
+    formFieldAttributes: ["ldap-user-provisioning-enabled?"],
+    defaultableFormFieldAttributes: ["ldap-user-provisioning-enabled?"],
+    formFieldsSchemas: {
+      "ldap-user-provisioning-enabled?": Yup.boolean().default(null),
     },
-    {
-      key: "ldap-sync-admin-group",
-      display_name: t`Sync Administrator group`,
-      type: "boolean",
-    },
-  ]),
-);
+    UserProvisioning: ({ fields, settings }) => (
+      <Stack spacing="0.75rem" m="2.5rem 0">
+        <SettingHeader
+          id="ldap-user-provisioning-enabled?"
+          setting={settings["ldap-user-provisioning-enabled?"]}
+        />
+        <FormSwitch
+          id="ldap-user-provisioning-enabled?"
+          name={fields["ldap-user-provisioning-enabled?"].name}
+          defaultChecked={fields["ldap-user-provisioning-enabled?"].default}
+        />
+      </Stack>
+    ),
+  });
 
-PLUGIN_ADMIN_SETTINGS_UPDATES.push(sections => ({
-  ...sections,
-  "authentication/google": {
-    component: SettingsGoogleForm,
-    sidebar: false,
-    settings: [
+  PLUGIN_ADMIN_SETTINGS_UPDATES.push(sections =>
+    updateIn(sections, ["authentication/ldap", "settings"], settings => [
       {
-        key: "google-auth-client-id",
+        key: "ldap-user-provisioning-enabled?",
+        display_name: t`User Provisioning`,
+        // eslint-disable-next-line no-literal-metabase-strings -- This string only shows for admins.
+        description: t`When a user logs in via LDAP, create a Metabase account for them automatically if they don't have one.`,
+        type: "boolean",
+      },
+      ...settings,
+      {
+        key: "ldap-group-membership-filter",
+        display_name: t`Group membership filter`,
+        type: "string",
       },
       {
-        // Default to OSS fields if enterprise SSO is not enabled
-        ...sections["authentication/google"].settings.find(
-          setting => setting.key === "google-auth-auto-create-accounts-domain",
-        ),
-        ...(hasPremiumFeature("sso") && {
-          placeholder: "mycompany.com, example.com.br, otherdomain.co.uk",
-          description:
-            "Allow users to sign up on their own if their Google account email address is from one of the domains you specify here:",
-        }),
+        key: "ldap-sync-admin-group",
+        display_name: t`Sync Administrator group`,
+        type: "boolean",
       },
-    ],
-  },
-}));
+    ]),
+  );
+}
+
+if (hasPremiumFeature("session_timeout_config")) {
+  PLUGIN_REDUX_MIDDLEWARES.push(createSessionMiddleware([LOGIN, LOGIN_GOOGLE]));
+}

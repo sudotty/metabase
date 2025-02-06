@@ -3,101 +3,132 @@
 
   TODO -- these have nothing to do with the application database. This namespace should be renamed something like
   `metabase.driver.util.metadata-queries`."
-  (:require [clojure.tools.logging :as log]
-            [metabase.driver :as driver]
-            [metabase.driver.util :as driver.u]
-            [metabase.models.table :as table :refer [Table]]
-            [metabase.query-processor :as qp]
-            [metabase.query-processor.interface :as qpi]
-            [metabase.sync.interface :as si]
-            [metabase.util :as u]
-            [metabase.util.schema :as su]
-            [schema.core :as s]
-            [toucan.db :as db]))
+  (:require
+   [medley.core :as m]
+   [metabase.driver :as driver]
+   [metabase.driver.util :as driver.u]
+   [metabase.legacy-mbql.schema :as mbql.s]
+   [metabase.legacy-mbql.schema.helpers :as helpers]
+   [metabase.lib.ident :as lib.ident]
+   [metabase.query-processor :as qp]
+   [metabase.query-processor.interface :as qp.i]
+   [metabase.util :as u]
+   [metabase.util.malli :as mu]
+   [metabase.util.malli.schema :as ms]
+   [toucan2.core :as t2]))
 
-(defn- qp-query [db-id mbql-query]
-  {:pre [(integer? db-id)]}
-  (-> (binding [qpi/*disable-qp-logging* true]
-        (qp/process-query
-         {:type       :query
-          :database   db-id
-          :query      mbql-query
-          :middleware {:disable-remaps? true}}))
-      :data
-      :rows))
+(defn- partition-field->filter-form
+  "Given a partition field, returns the default value can be used to query."
+  [field]
+  (let [field-form [:field (:id field) {:base-type (:base_type field)}]]
+    (condp #(isa? %2 %1) (:base_type field)
+      :type/Number   [:> field-form -9223372036854775808]
+      :type/Date     [:> field-form "0001-01-01"]
+      :type/DateTime [:> field-form "0001-01-01T00:00:00"])))
 
-(defn- field-query [{table-id :table_id} mbql-query]
-  {:pre [(integer? table-id)]}
-  (qp-query (db/select-one-field :db_id Table, :id table-id)
-            ;; this seeming useless `merge` statement IS in fact doing something important. `ql/query` is a threading
-            ;; macro for building queries. Do not remove
-            (assoc mbql-query :source-table table-id)))
+(defn add-required-filters-if-needed
+  "Add a dummy filter for tables that require filters.
+  Look into tables from source tables and all the joins.
+  Currently this only apply to partitioned tables on bigquery that requires a partition filter.
+  In the future we probably want this to be dispatched by database engine or handled by QP."
+  [query]
+  (let [table-ids              (->> (conj (keep :source-table (:joins query)) (:source-table query))
+                                    (filter pos-int?))
+        required-filter-fields (when (seq table-ids)
+                                 (t2/select :model/Field {:select    [:f.*]
+                                                          :from      [[:metabase_field :f]]
+                                                          :left-join [[:metabase_table :t] [:= :t.id :f.table_id]]
+                                                          :where     [:and
+                                                                      [:= :f.active true]
+                                                                      [:= :f.database_partitioned true]
+                                                                      [:= :t.active true]
+                                                                      [:= :t.database_require_filter true]
+                                                                      [:in :t.id table-ids]]}))
+        update-query-filter-fn (fn [existing-filter new-filter]
+                                 (if (some? existing-filter)
+                                   [:and existing-filter new-filter]
+                                   new-filter))]
+    (case (count required-filter-fields)
+      0
+      query
+      1
+      (update query :filter update-query-filter-fn (partition-field->filter-form (first required-filter-fields)))
+      ;; > 1
+      (update query :filter update-query-filter-fn (into [:and] (map partition-field->filter-form required-filter-fields))))))
 
-(defn table-row-count
-  "Fetch the row count of `table` via the query processor."
-  [table]
-  {:pre  [(map? table)]
-   :post [(integer? %)]}
-  (let [results (qp-query (:db_id table) {:source-table (u/the-id table)
-                                          :aggregation  [[:count]]})]
-    (try (-> results first first long)
-         (catch Throwable e
-           (log/error "Error fetching table row count. Query returned:\n"
-                      (u/pprint-to-str results))
-           (throw e)))))
+(defn- add-breakout-idents-if-needed [{:keys [breakout] :as inner-query}]
+  (m/assoc-some inner-query :breakout-idents (lib.ident/indexed-idents breakout)))
 
-(def ^:private ^Integer absolute-max-distinct-values-limit
-  "The absolute maximum number of results to return for a `field-distinct-values` query. Normally Fields with 100 or
-  less values (at the time of this writing) get marked as `auto-list` Fields, meaning we save all their distinct
-  values in a FieldValues object, which powers a list widget in the FE when using the Field for filtering in the QB.
-  Admins can however manually mark any Field as `list`, which is effectively ordering Metabase to keep FieldValues for
-  the Field regardless of its cardinality.
+(defn table-query
+  "Runs the `mbql-query` where the source table is `table-id` and returns the result.
+  Add the required filters if the table requires it, see [[add-required-filters-if-needed]] for more details.
+  Also takes an optional `rff`, use the default rff if not provided."
+  ([table-id mbql-query]
+   (table-query table-id mbql-query nil))
+  ([table-id mbql-query rff]
+   {:pre [(integer? table-id)]}
+   (binding [qp.i/*disable-qp-logging* true]
+     (qp/process-query
+      {:type       :query
+       :database   (t2/select-one-fn :db_id :model/Table table-id)
+       :query      (-> mbql-query
+                       (assoc :source-table table-id)
+                       add-required-filters-if-needed
+                       add-breakout-idents-if-needed)
+       :middleware {:disable-remaps? true}}
+      rff))))
 
-  Of course, if a User does something crazy, like mark a million-arity Field as List, we don't want Metabase to
-  explode trying to make their dreams a reality; we need some sort of hard limit to prevent catastrophes. So this
-  limit is effectively a safety to prevent Users from nuking their own instance for Fields that really shouldn't be
-  List Fields at all. For these very-high-cardinality Fields, we're effectively capping the number of
-  FieldValues that get could saved.
+(defn search-values-query
+  "Generate the MBQL query used to power FieldValues search in [[metabase.api.field/search-values]]. The actual query generated
+  differs slightly based on whether the two Fields are the same Field.
 
-  This number should be a balance of:
-
-  * Not being too low, which would definitely result in GitHub issues along the lines of 'My 500-distinct-value Field
-    that I marked as List is not showing all values in the List Widget'
-  * Not being too high, which would result in Metabase running out of memory dealing with too many values"
-  (int 5000))
-
-(s/defn field-distinct-values
-  "Return the distinct values of `field`.
-   This is used to create a `FieldValues` object for `:type/Category` Fields."
-  ([field]
-   (field-distinct-values field absolute-max-distinct-values-limit))
-
-  ([field max-results :- su/IntGreaterThanZero]
-   (mapv first (field-query field {:breakout [[:field (u/the-id field) nil]]
-                                   :limit    max-results}))))
+  Note: the generated MBQL query assume that both `field` and `search-field` are from the same table."
+  [field search-field value limit]
+  (-> (table-query (:table_id field)
+                   {:filter   (when (some? value)
+                                [:contains [:field (u/the-id search-field) nil] value {:case-sensitive false}])
+                   ;; if both fields are the same then make sure not to refer to it twice in the `:breakout` clause.
+                   ;; Otherwise this will break certain drivers like BigQuery that don't support duplicate
+                   ;; identifiers/aliases
+                    :breakout (if (= (u/the-id field) (u/the-id search-field))
+                                [[:field (u/the-id field) nil]]
+                                [[:field (u/the-id field) nil]
+                                 [:field (u/the-id search-field) nil]])
+                    :limit    limit})
+      :data :rows))
 
 (defn field-distinct-count
   "Return the distinct count of `field`."
   [field & [limit]]
-  (-> (field-query field {:aggregation [[:distinct [:field (u/the-id field) nil]]]
-                          :limit       limit})
-      first first int))
+  (-> (table-query (:table_id field) {:aggregation        [[:distinct [:field (u/the-id field) nil]]]
+                                      :aggregation-idents (lib.ident/indexed-idents 1)
+                                      :limit              limit})
+      :data :rows first first int))
 
 (defn field-count
   "Return the count of `field`."
   [field]
-  (-> (field-query field {:aggregation [[:count [:field (u/the-id field) nil]]]})
-      first first int))
+  (-> (table-query (:table_id field) {:aggregation        [[:count [:field (u/the-id field) nil]]]
+                                      :aggregation-idents (lib.ident/indexed-idents 1)})
+      :data :rows first first int))
 
 (def max-sample-rows
   "The maximum number of values we should return when using `table-rows-sample`. This many is probably fine for
   inferring semantic types and what-not; we don't want to scan millions of values at any rate."
   10000)
 
-(def TableRowsSampleOptions
+(def nested-field-sample-limit
+  "Number of rows to sample for tables with nested (e.g., JSON) columns."
+  500)
+
+(def ^:private TableRowsSampleOptions
   "Schema for `table-rows-sample` options"
-  (s/maybe {(s/optional-key :truncation-size) s/Int
-            (s/optional-key :rff)             s/Any}))
+  [:maybe
+   [:map
+    [:truncation-size {:optional true} :int]
+    [:limit           {:optional true} :int]
+    [:order-by        {:optional true} (helpers/distinct (helpers/non-empty [:sequential ::mbql.s/OrderBy]))]
+    [:rff             {:optional true} fn?]]])
 
 (defn- text-field?
   "Identify text fields which can accept our substring optimization.
@@ -110,36 +141,55 @@
 
 (defn- table-rows-sample-query
   "Returns the mbql query to query a table for sample rows"
-  [table fields {:keys [truncation-size] :as _opts}]
-  (let [driver             (-> table table/database driver.u/database->driver)
+  [table
+   fields
+   {:keys [truncation-size limit order-by] :or {limit max-sample-rows} :as _opts}]
+  (let [database           (t2/select-one :model/Database (:db_id table))
+        driver             (driver.u/database->driver database)
         text-fields        (filter text-field? fields)
-        field->expressions (when (and truncation-size (driver/supports? driver :expressions))
+        field->expressions (when (and truncation-size (driver.u/supports? driver :expressions database))
                              (into {} (for [field text-fields]
                                         [field [(str (gensym "substring"))
-                                                [:substring [:field (u/the-id field) nil] 1 truncation-size]]])))]
+                                                [:substring [:field (u/the-id field) nil]
+                                                 1 truncation-size]]])))
+        expressions        (into {} (vals field->expressions))]
     {:database   (:db_id table)
      :type       :query
-     :query      {:source-table (u/the-id table)
-                  :expressions  (into {} (vals field->expressions))
-                  :fields       (vec (for [field fields]
-                                       (if-let [[expression-name _] (get field->expressions field)]
-                                         [:expression expression-name]
-                                         [:field (u/the-id field) nil])))
-                  :limit        max-sample-rows}
+     :query      (cond-> {:source-table (u/the-id table)
+                          :expressions  expressions
+                          :expression-idents (update-vals expressions (fn [_] (u/generate-nano-id)))
+                          :fields       (vec (for [field fields]
+                                               (if-let [[expression-name _] (get field->expressions field)]
+                                                 [:expression expression-name]
+                                                 [:field (u/the-id field) nil])))
+                          :limit        limit}
+                   order-by
+                   (assoc :order-by order-by)
+
+                   true
+                   add-required-filters-if-needed)
      :middleware {:format-rows?           false
                   :skip-results-metadata? true}}))
 
-(s/defn table-rows-sample
+(mu/defn table-rows-sample
   "Run a basic MBQL query to fetch a sample of rows of FIELDS belonging to a TABLE.
 
   Options: a map of
   `:truncation-size`: [optional] size to truncate text fields if the driver supports expressions.
   `:rff`: [optional] a reducing function function (a function that given initial results metadata returns a reducing
   function) to reduce over the result set in the the query-processor rather than realizing the whole collection"
-  {:style/indent 1}
-  ([table :- si/TableInstance, fields :- [si/FieldInstance], rff]
+  ([table  :- (ms/InstanceOf :model/Table)
+    fields :- [:sequential (ms/InstanceOf :model/Field)]
+    rff]
    (table-rows-sample table fields rff nil))
-  ([table :- si/TableInstance, fields :- [si/FieldInstance], rff, opts :- TableRowsSampleOptions]
-   (let [query   (table-rows-sample-query table fields opts)
-         qp      (resolve 'metabase.query-processor/process-query)]
-     (qp query {:rff rff}))))
+
+  ([table  :- (ms/InstanceOf :model/Table)
+    fields :- [:sequential (ms/InstanceOf :model/Field)]
+    rff    :- fn?
+    opts   :- TableRowsSampleOptions]
+   (let [query (table-rows-sample-query table fields opts)]
+     (qp/process-query query rff))))
+
+(defmethod driver/table-rows-sample :default
+  [_driver table fields rff opts]
+  (table-rows-sample table fields rff opts))

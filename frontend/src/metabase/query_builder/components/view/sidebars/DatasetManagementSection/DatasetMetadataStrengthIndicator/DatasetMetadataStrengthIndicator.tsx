@@ -1,28 +1,21 @@
-import React from "react";
+import { useRef } from "react";
+import { useHoverDirty } from "react-use";
 import { t } from "ttag";
 
-import Question from "metabase-lib/lib/Question";
-
-import ProgressBar from "metabase/components/ProgressBar";
-import Tooltip from "metabase/components/Tooltip";
-
+import CS from "metabase/css/core/index.css";
 import { color } from "metabase/lib/colors";
-import { getDatasetMetadataCompletenessPercentage } from "metabase/lib/data-modeling/metadata";
-import { useHover } from "metabase/hooks/use-hover";
+import { Box, Tooltip } from "metabase/ui";
+import type Question from "metabase-lib/v1/Question";
+import { getDatasetMetadataCompletenessPercentage } from "metabase-lib/v1/metadata/utils/models";
 
-import {
-  Root,
-  PercentageLabel,
-  TooltipContent,
-  TooltipParagraph,
-} from "./DatasetMetadataStrengthIndicator.styled";
+import DatasetMetadataStrengthIndicatorS from "./DatasetMetadataStrengthIndicator.module.css";
 
 function getIndicationColor(percentage: number, isHovered: boolean): string {
   if (percentage <= 0.5) {
     return color("danger");
   }
   if (!isHovered) {
-    return color("bg-medium");
+    return color("text-medium");
   }
   return percentage >= 0.9 ? color("success") : color("warning");
 }
@@ -36,14 +29,23 @@ function getTooltipMessage(percentage: number) {
     percentage <= 0.5 ? t`Most` : percentage >= 0.8 ? t`Some` : t`Many`;
 
   return (
-    <TooltipContent>
-      <TooltipParagraph>
+    <Box
+      className={DatasetMetadataStrengthIndicatorS.TooltipContent}
+      data-testid="tooltip-content"
+    >
+      <Box
+        component="p"
+        className={DatasetMetadataStrengthIndicatorS.TooltipParagraph}
+      >
         {t`${columnCountDescription} columns are missing a column type, description, or friendly name.`}
-      </TooltipParagraph>
-      <TooltipParagraph>
+      </Box>
+      <Box
+        component="p"
+        className={DatasetMetadataStrengthIndicatorS.TooltipParagraph}
+      >
         {t`Adding metadata makes it easier for your team to explore this data.`}
-      </TooltipParagraph>
-    </TooltipContent>
+      </Box>
+    </Box>
   );
 }
 
@@ -53,12 +55,14 @@ function formatPercentage(percentage: number): string {
 
 type Props = {
   dataset: Question;
+  className?: string;
 };
 
-const TOOLTIP_DELAY: [number, null] = [700, null];
+const TOOLTIP_DELAY = 700;
 
 function DatasetMetadataStrengthIndicator({ dataset, ...props }: Props) {
-  const [hoverRef, isHovered] = useHover<HTMLDivElement>();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const isHovering = useHoverDirty(rootRef);
   const resultMetadata = dataset.getResultMetadata();
 
   if (!Array.isArray(resultMetadata) || resultMetadata.length === 0) {
@@ -66,26 +70,34 @@ function DatasetMetadataStrengthIndicator({ dataset, ...props }: Props) {
   }
 
   const percentage = getDatasetMetadataCompletenessPercentage(resultMetadata);
-  const indicationColor = getIndicationColor(percentage, isHovered);
+  const indicationColor = getIndicationColor(percentage, isHovering);
 
   return (
-    <Root {...props} ref={hoverRef}>
+    <Box
+      display="inline-block"
+      className={CS.floatRight}
+      {...props}
+      ref={rootRef}
+    >
       <Tooltip
-        tooltip={getTooltipMessage(percentage)}
-        delay={TOOLTIP_DELAY}
-        placement="bottom"
+        label={getTooltipMessage(percentage)}
+        openDelay={TOOLTIP_DELAY}
+        position="bottom"
       >
-        <PercentageLabel color={indicationColor}>
+        <Box
+          component="span"
+          fz="0.8rem"
+          fw="bold"
+          className={DatasetMetadataStrengthIndicatorS.PercentageLabel}
+          c={indicationColor}
+          data-testid="tooltip-component-wrapper"
+        >
           {formatPercentage(percentage)}
-        </PercentageLabel>
-        <ProgressBar
-          percentage={percentage}
-          color={indicationColor}
-          height="8px"
-        />
+        </Box>
       </Tooltip>
-    </Root>
+    </Box>
   );
 }
 
+// eslint-disable-next-line import/no-default-export -- deprecated usage
 export default DatasetMetadataStrengthIndicator;

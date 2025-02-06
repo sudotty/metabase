@@ -1,48 +1,74 @@
-import React from "react";
-import { render, screen } from "@testing-library/react";
+import "metabase/plugins/builtin";
 import userEvent from "@testing-library/user-event";
-import PasswordPanel from "./PasswordPanel";
-import { AuthProvider } from "metabase/auth/types";
+import fetchMock from "fetch-mock";
+
+import {
+  setupCurrentUserEndpoint,
+  setupLoginEndpoint,
+  setupPropertiesEndpoints,
+} from "__support__/server-mocks";
+import { renderWithProviders, screen, waitFor } from "__support__/ui";
+import MetabaseSettings from "metabase/lib/settings";
+import { createMockSettings, createMockUser } from "metabase-types/api/mocks";
+import {
+  createMockSettingsState,
+  createMockState,
+} from "metabase-types/store/mocks";
+
+import { PasswordPanel } from "./PasswordPanel";
+
+const TEST_EMAIL = "user@example.test";
+const TEST_PASSWORD = "password";
+
+interface SetupOpts {
+  isGoogleAuthEnabled?: boolean;
+}
+
+const setup = ({ isGoogleAuthEnabled = false }: SetupOpts = {}) => {
+  const state = createMockState({
+    settings: createMockSettingsState({
+      "google-auth-enabled": isGoogleAuthEnabled,
+    }),
+  });
+
+  MetabaseSettings.set("google-auth-enabled", isGoogleAuthEnabled);
+
+  setupLoginEndpoint();
+  setupCurrentUserEndpoint(createMockUser());
+  setupPropertiesEndpoints(createMockSettings());
+  renderWithProviders(<PasswordPanel />, { storeInitialState: state });
+};
+
+const cleanUp = () => {
+  MetabaseSettings.set("google-auth-enabled", false);
+};
 
 describe("PasswordPanel", () => {
-  it("should login successfully", () => {
-    const onLogin = jest.fn().mockResolvedValue({});
+  afterEach(() => {
+    cleanUp();
+  });
 
-    render(<PasswordPanel onLogin={onLogin} />);
-    userEvent.click(screen.getByText("Sign in"));
+  it("should login successfully", async () => {
+    setup();
 
-    expect(onLogin).toHaveBeenCalled();
+    await userEvent.type(screen.getByLabelText("Email address"), TEST_EMAIL);
+    await userEvent.type(screen.getByLabelText("Password"), TEST_PASSWORD);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Sign in" })).toBeEnabled();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() => {
+      expect(fetchMock.done("path:/api/session")).toBe(true);
+    });
   });
 
   it("should render a link to reset the password and a list of auth providers", () => {
-    const providers = [getAuthProvider()];
-    const onLogin = jest.fn();
-
-    render(<PasswordPanel providers={providers} onLogin={onLogin} />);
+    setup({ isGoogleAuthEnabled: true });
 
     expect(screen.getByText(/forgotten my password/)).toBeInTheDocument();
     expect(screen.getByText("Sign in with Google")).toBeInTheDocument();
   });
 });
-
-interface FormMockProps {
-  submitTitle: string;
-  onSubmit: () => void;
-}
-
-const FormMock = ({ submitTitle, onSubmit }: FormMockProps) => {
-  return <button onClick={onSubmit}>{submitTitle}</button>;
-};
-
-jest.mock("metabase/entities/users", () => ({
-  forms: { login: jest.fn() },
-  Form: FormMock,
-}));
-
-const getAuthProvider = (opts?: Partial<AuthProvider>): AuthProvider => ({
-  name: "google",
-  Button: AuthButtonMock,
-  ...opts,
-});
-
-const AuthButtonMock = () => <a href="/">Sign in with Google</a>;

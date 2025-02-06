@@ -1,46 +1,65 @@
-import { createEntity } from "metabase/lib/entities";
+import { revisionApi, useListRevisionsQuery } from "metabase/api";
+import { createEntity, entityCompatibleQuery } from "metabase/lib/entities";
 
-import { GET, POST } from "metabase/lib/api";
+import Dashboards from "./dashboards";
+import Questions from "./questions";
 
-const listRevisions = GET("/api/revision");
+const REVERT = "metabase/entities/revisions/REVERT_REVISION";
 
-const ASSOCIATED_ENTITY_TYPES = ["questions", "dashboards"];
-
-const Revision = createEntity({
+/**
+ * @deprecated use "metabase/api" instead
+ */
+const Revisions = createEntity({
   name: "revisions",
+  rtk: {
+    useListQuery: useListRevisionsQuery,
+  },
   api: {
-    list: ({ model_type, model_id }, options) =>
-      // add model_type and model_id to each object since they are required for revert
-      listRevisions({ entity: model_type, id: model_id }).then(revisions =>
-        revisions.map(revision => ({
-          model_type,
-          model_id,
-          ...revision,
-        })),
-      ),
-    revert: POST("/api/revision/revert"),
+    list: ({ model_type, model_id }, dispatch) =>
+      entityCompatibleQuery(
+        { entity: model_type, id: model_id },
+        dispatch,
+        revisionApi.endpoints.listRevisions,
+      )
+        // add model_type and model_id to each object since they are required for revert
+        .then(revisions =>
+          revisions.map(revision => ({
+            model_type,
+            model_id,
+            ...revision,
+          })),
+        ),
+  },
+
+  actionTypes: {
+    REVERT,
   },
 
   objectActions: {
     // use thunk since we don't actually want to dispatch an action
-    revert: revision => (dispatch, getState) =>
-      Revision.api.revert({
-        entity: revision.model_type,
-        id: revision.model_id,
-        revision_id: revision.id,
-      }),
+    revert: revision => async dispatch => {
+      await entityCompatibleQuery(
+        {
+          entity: revision.model_type,
+          id: revision.model_id,
+          revision_id: revision.id,
+        },
+        dispatch,
+        revisionApi.endpoints.revertRevision,
+      );
+
+      dispatch(Revisions.actions.invalidateLists());
+      dispatch({ type: REVERT, payload: revision });
+    },
   },
 
   actionShouldInvalidateLists(action) {
-    const entities = require("metabase/entities");
-    for (const type of ASSOCIATED_ENTITY_TYPES) {
-      if (entities[type].actionShouldInvalidateLists(action)) {
-        return true;
-      }
-    }
-
-    return action.type === this.actionTypes.INVALIDATE_LISTS_ACTION;
+    return (
+      action.type === this.actionTypes.INVALIDATE_LISTS_ACTION ||
+      Dashboards.actionShouldInvalidateLists(action) ||
+      Questions.actionShouldInvalidateLists(action)
+    );
   },
 });
 
-export default Revision;
+export default Revisions;

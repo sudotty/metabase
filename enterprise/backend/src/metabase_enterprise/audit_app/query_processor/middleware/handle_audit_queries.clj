@@ -31,21 +31,23 @@
   REDUCIBLE FORMAT:
 
   *  `:metadata` is the same as the legacy format.
-  *  `:results` is a function that takes `context` and returns something that can be reduced.
+  *  `:results` is a thunk that returns something that can be reduced.
   *  `:xform` is an optional xform to apply to each result row while reducing the query
 
     {:metadata ...
-     :results  (fn [context] ...)
+     :results  (fn [] ...)
      :xform    ...}"
-  (:require [clojure.data :as data]
-            [metabase-enterprise.audit-app.interface :as audit.i]
-            [metabase.api.common :as api]
-            [metabase.public-settings.premium-features :as premium-features]
-            [metabase.query-processor.context :as context]
-            [metabase.query-processor.error-type :as error-type]
-            [metabase.util.i18n :refer [tru]]
-            [metabase.util.schema :as su]
-            [schema.core :as s]))
+  (:require
+   [clojure.data :as data]
+   [metabase-enterprise.audit-app.interface :as audit.i]
+   [metabase.api.common.validation :as validation]
+   [metabase.premium-features.core :as premium-features :refer [defenterprise]]
+   [metabase.query-processor.error-type :as qp.error-type]
+   [metabase.query-processor.pipeline :as qp.pipeline]
+   [metabase.query-processor.schema :as qp.schema]
+   [metabase.query-processor.util :as qp.util]
+   [metabase.util.i18n :refer [tru]]
+   [metabase.util.malli :as mu]))
 
 (defn- check-results-and-metadata-keys-match
   "Primarily for dev and debugging purposes. We can probably take this out when shipping the finished product."
@@ -58,17 +60,18 @@
         (throw
          (Exception.
           (str "results-keys and metadata-keys differ.\n"
-               "results-keys:" results-keys "\n"
-               "metadata-keys:" metadata-keys "\n"
-               "in results, but not metadata:" only-in-results "\n"
-               "in metadata, but not results:" only-in-metadata)))))))
+               "results-keys: " results-keys "\n"
+               "metadata-keys: " metadata-keys "\n"
+               "in results, but not metadata: " only-in-results "\n"
+               "in metadata, but not results: " only-in-metadata)))))))
 
 (defn- metadata->cols [metadata]
   (for [[k v] metadata]
     (assoc v :name (name k))))
 
-(s/defn ^:private format-results [{:keys [results metadata]} :- {:results  [su/Map]
-                                                                 :metadata audit.i/ResultsMetadata}]
+(mu/defn- format-results [{:keys [results metadata]} :- [:map
+                                                         [:results  [:sequential :map]]
+                                                         [:metadata audit.i/ResultsMetadata]]]
   (check-results-and-metadata-keys-match results metadata)
   {:cols (metadata->cols metadata)
    :rows (for [row results]
@@ -77,10 +80,18 @@
 
 (def InternalQuery
   "Schema for a valid `internal` type query."
-  {:type                    (s/enum :internal "internal")
-   :fn                      #"^([\w\d-]+\.)*[\w\d-]+/[\w\d-]+$" ; namespace-qualified symbol
-   (s/optional-key :args)   [s/Any]
-   s/Any                    s/Any})
+  [:map
+   [:type [:enum :internal "internal"]]
+   [:fn   [:and
+           :string
+           [:fn
+            {:error/message "namespace-qualified symbol serialized as a string"}
+            (fn [s]
+              (try
+                (when-let [symb (symbol s)]
+                  (qualified-symbol? symb))
+                (catch Throwable _)))]]]
+   [:args {:optional true} [:sequential :any]]])
 
 (def ^:dynamic *additional-query-params*
   "Additional `internal` query params beyond `type`, `fn`, and `args`. These are bound to this dynamic var which is a
@@ -88,43 +99,45 @@
   to implement paging for all audit app queries automatically."
   nil)
 
-(defn- reduce-reducible-results [rff context {:keys [metadata results xform], :or {xform identity}}]
+(defn- reduce-reducible-results [rff {:keys [metadata results xform], :or {xform identity}}]
   (let [cols           (metadata->cols metadata)
-        reducible-rows (results context)
+        reducible-rows (results)
         rff*           (fn [metadata]
                          (xform (rff metadata)))]
     (assert (some? cols))
     (assert (instance? clojure.lang.IReduceInit reducible-rows))
-    (context/reducef rff* context {:cols cols} reducible-rows)))
+    (qp.pipeline/*reduce* rff* {:cols cols} reducible-rows)))
 
-(defn- reduce-legacy-results [rff context results]
+(defn- reduce-legacy-results [rff results]
   (let [{:keys [cols rows]} (format-results results)]
     (assert (some? cols))
     (assert (some? rows))
-    (context/reducef rff context {:cols cols} rows)))
+    (qp.pipeline/*reduce* rff {:cols cols} rows)))
 
-(defn- reduce-results [rff context {rows :results, :as results}]
+(defn- reduce-results [rff {rows :results, :as results}]
   ((if (fn? rows)
      reduce-reducible-results
-     reduce-legacy-results) rff context results))
+     reduce-legacy-results) rff results))
 
-(s/defn ^:private process-internal-query
-  [{qualified-fn-str :fn, args :args, :as query} :- InternalQuery rff context]
-  ;; Make sure current user is a superuser
-  (api/check-superuser)
+(mu/defn- process-internal-query
+  [{qualified-fn-str :fn, args :args, :as query} :- InternalQuery
+   rff                                           :- ::qp.schema/rff]
+  ;; Make sure current user is a superuser or has monitoring permissions
+  (validation/check-has-application-permission :monitoring)
   ;; Make sure audit app is enabled (currently the only use case for internal queries). We can figure out a way to
   ;; allow non-audit-app queries if and when we add some
   (when-not (premium-features/enable-audit-app?)
     (throw (ex-info (tru "Audit App queries are not enabled on this instance.")
-                    {:type error-type/invalid-query})))
+                    {:type qp.error-type/invalid-query})))
   (binding [*additional-query-params* (dissoc query :fn :args)]
     (let [resolved (apply audit.i/resolve-internal-query qualified-fn-str args)]
-      (reduce-results rff context resolved))))
+      (reduce-results rff resolved))))
 
-(defn handle-internal-queries
-  "Middleware that handles `internal` type queries."
+(defenterprise handle-audit-app-internal-queries
+  "Middleware that handles `:internal` (Audit App) type queries."
+  :feature :audit-app
   [qp]
-  (fn [{query-type :type, :as query} xform context]
-    (if (= :internal (keyword query-type))
-      (process-internal-query query xform context)
-      (qp query xform context))))
+  (fn [query rff]
+    (if (qp.util/internal-query? query)
+      (process-internal-query query rff)
+      (qp query rff))))

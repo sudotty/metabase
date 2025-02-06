@@ -1,26 +1,22 @@
 (ns metabase.models.collection-permission-graph-revision
-  (:require [metabase.util :as u]
-            [metabase.util.i18n :refer [tru]]
-            [toucan.db :as db]
-            [toucan.models :as models]))
+  (:require
+   [metabase.models.interface :as mi]
+   [methodical.core :as methodical]
+   [toucan2.core :as t2]))
 
-(models/defmodel CollectionPermissionGraphRevision :collection_permission_graph_revision)
+(methodical/defmethod t2/table-name :model/CollectionPermissionGraphRevision [_model] :collection_permission_graph_revision)
 
-(defn- pre-insert [revision]
-  (assoc revision :created_at :%now))
+(doto :model/CollectionPermissionGraphRevision
+  (derive :metabase/model)
+  (derive :hook/created-at-timestamped?))
 
-(u/strict-extend (class CollectionPermissionGraphRevision)
-  models/IModel
-  (merge models/IModelDefaults
-         {:types      (constantly {:before :json
-                                   :after  :json})
-          :pre-insert pre-insert
-          :pre-update (fn [& _] (throw (Exception. (tru "You cannot update a CollectionPermissionGraphRevision!"))))}))
-
+(t2/deftransforms :model/CollectionPermissionGraphRevision
+  {:before mi/transform-json
+   :after  mi/transform-json})
 
 (defn latest-id
   "Return the ID of the newest `CollectionPermissionGraphRevision`, or zero if none have been made yet.
    (This is used by the collection graph update logic that checks for changes since the original graph was fetched)."
   []
-  (or (:id (db/select-one [CollectionPermissionGraphRevision [:%max.id :id]]))
+  (or (:id (t2/select-one [:model/CollectionPermissionGraphRevision [:%max.id :id]]))
       0))

@@ -1,3 +1,7 @@
+---
+title: The dates and times in my questions and charts are wrong
+---
+
 # The dates and times in my questions and charts are wrong
 
 You are doing calculations with dates and times, or displaying them in charts, but:
@@ -26,7 +30,7 @@ Once you have these answers, look for cases like these:
 Once you think you have identified a problem, drill down to understand exactly what time zone conversion is causing the underlying problem. For example, suppose you're looking at a time series with daily values; if your error is happening with weekly totals, you can:
 
 1. Pick a specific day where you know the number is incorrect.
-2. Click on the data point in a chart, or a cell in a result table, and select "View these X."
+2. Click on the data point in a chart, or a cell in a result table, and select "See these X."
 3. Open this question in two other tabs in your browser. Change the date filters so that one tab has the rows in the underlying table from the _previous_ day, and the other table has the rows in the underlying table from the _next_ day.
 4. Check that the date field being used to group the result in the underlying display is correct. If it is different from what you have stored in the database, or what you have in another tool, then the timestamp is being transformed incorrectly across the board. This often happens when you use a date or time lacking an explicit time zone.
 5. If the underlying timestamps are correct (which they should if they have explicit time zones), the individual times are probably being grouped into days in a different time zone than the one you want.
@@ -40,14 +44,8 @@ Once you think you have identified a problem, drill down to understand exactly w
 
 **Steps to take:**
 
-1. Go to the Admin Panel, select the **Localization** tab, and check the **Report Time Zone** setting, which controls the timezone Metabase uses when connecting to the database. This setting is currently supported on:
-   - Druid
-   - MySQL
-   - Oracle
-   - PostgreSQL
-   - Presto
-   - Vertica
-2. If you're using a database that doesn't support a Report Time Zone, ensure that Metabase's time zone matches that of the database. Metabase's time zone is the Java Virtual Machine's time zone, typically set via a `-Duser.timezone<..>` parameter or the `JAVA_TIMEZONE` environment variable; exactly how it is set will depend on how you launch Metabase. Note that Metabase's time zone doesn't impact any databases that use a Report Time Zone.
+1. Check the [report timezone setting](../configuring-metabase/localization.md#report-timezone) from **Admin settings** > **Settings** > **Localization**.
+2. If you're using a database that doesn't support the report timezone setting, ensure that Metabase's time zone matches that of the database. Metabase's time zone is the Java Virtual Machine's time zone, typically set via a `-Duser.timezone<..>` parameter or the `JAVA_TIMEZONE` environment variable; exactly how it is set will depend on how you launch Metabase. Note that Metabase's time zone doesn't impact any databases that use a Report Time Zone.
 
 ## Are SQL queries not respecting the Reporting Time Zone setting?
 
@@ -55,15 +53,23 @@ Once you think you have identified a problem, drill down to understand exactly w
 
 **Steps to take:**
 
-1. Set a reporting time zone explicitly in your SQL query.
+Set a reporting time zone explicitly in your SQL query.
+
+For example, you can write something like this with PostgreSQL:
+
+```sql
+SELECT column::TIMESTAMP AT TIME ZONE 'EST' AS column_est
+```
+
+This statement casts the column to a `timestamp` data type first, then converts the `timestamp` into a `timestamptz` data type, with time zone 'EST'.
 
 ## Are dates without an explicit time zone being converted to another day?
 
-**Root cause:** You are grouping by a date (rather than by a time) that doesn't have a time zone attached to it.
+**Root cause:** You are grouping by a date (rather than by a time) that lacks a time zone.
 
 **Steps to take:**
 
-1. Look at every time field your question uses in the [Data Model Reference][data-model] and see if any of them are simply a "Date" field.
+1. Look at every time field your question uses in the [Data Model Reference](../exploration-and-organization/data-model-reference.md) and see if any of them are simply a "Date" field.
 2. If so, make sure the server time zone reflects the reporting time zone, because when a query is run on Metabase, the server applies the configured time zone to that date.
 
 ## Are you mixing explicit and implicit time zones?
@@ -73,6 +79,4 @@ Once you think you have identified a problem, drill down to understand exactly w
 **Steps to take:**
 
 1. This typically happens with a question that uses multiple fields: for example, you're filtering on one timestamp and grouping by another. Check the time zones of each of the dates or times you are using in your question.
-2. You''ll need to explicitly set the time zone for any value that doesn't have an explicit time zone. This will need to be done either in a SQL query or by transforming the data in your database to ensure both timestamps have time zones.
-
-[data-model]: ../users-guide/12-data-model-reference.html
+2. You'll need to explicitly set the time zone for any value that lacks an explicit time zone. This will need to be done either in a SQL query or by transforming the data in your database to ensure both timestamps have time zones.

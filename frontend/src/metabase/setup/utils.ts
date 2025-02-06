@@ -1,5 +1,12 @@
+import { getIn } from "icepick";
 import _ from "underscore";
-import { Locale, LocaleData } from "./types";
+
+import MetabaseSettings from "metabase/lib/settings";
+import { UtilApi } from "metabase/services";
+import type { LocaleData } from "metabase-types/api";
+import type { Locale } from "metabase-types/store";
+
+import { SUBSCRIBE_TOKEN, SUBSCRIBE_URL } from "./constants";
 
 export const getLocales = (
   localeData: LocaleData[] = [["en", "English"]],
@@ -27,14 +34,32 @@ export const getUserToken = (hash = window.location.hash): string => {
   return hash.replace(/^#/, "");
 };
 
-const SUBSCRIBE_URL =
-  "https://metabase.us10.list-manage.com/subscribe/post?u=869fec0e4689e8fd1db91e795&id=b9664113a8";
-const SUBSCRIBE_TOKEN = "b_869fec0e4689e8fd1db91e795_b9664113a8";
+export const validatePassword = async (password: string) => {
+  const error = MetabaseSettings.passwordComplexityDescription(password);
+  if (error) {
+    return error;
+  }
 
-export const subscribeToNewsletter = async (email: string): Promise<void> => {
+  try {
+    await UtilApi.password_check({ password });
+  } catch (error) {
+    return getIn(error, ["data", "errors", "password"]);
+  }
+};
+
+export const subscribeToNewsletter = (email: string) => {
   const body = new FormData();
   body.append("EMAIL", email);
   body.append(SUBSCRIBE_TOKEN, "");
 
-  await fetch(SUBSCRIBE_URL, { method: "POST", mode: "no-cors", body });
+  if ("sendBeacon" in navigator) {
+    navigator.sendBeacon(SUBSCRIBE_URL, body);
+  } else {
+    fetch(SUBSCRIBE_URL, {
+      method: "POST",
+      mode: "no-cors",
+      body,
+      keepalive: true,
+    });
+  }
 };

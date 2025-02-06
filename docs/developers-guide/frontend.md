@@ -1,3 +1,7 @@
+---
+title: Frontend
+---
+
 # Frontend
 
 ## Entity Loaders
@@ -109,152 +113,6 @@ Any additional selectors and actions defined in the entities' `objectSelectors` 
 
 You can also use the Redux actions and selectors directly, for example, `dispatch(Users.actions.loadList())` and `Users.selectors.getList(state)`.
 
-## Forms
-
-Metabase includes a comprehensive custom React and [`redux-form`](https://redux-form.com/5.2.3/) based form library. It also integrates with Metabase's [Entities](https://github.com/metabase/metabase/wiki/Frontend:-Entity-Loaders) system.
-
-The core React component of the system is [`metabase/containers/Form`](https://github.com/metabase/metabase/blob/master/frontend/src/metabase/containers/Form.jsx).
-
-### Form Definitions
-
-Form definitions can be provided in two different ways, with a JavaScript-based form definition object, or inline React `<FormField>` elements.
-
-Pass a form definition to the `form` prop:
-
-```javascript
-<Form
-  form={%raw%}{{
-    fields: [
-      {
-        name: "email",
-        placeholder: "bob@metabase.com",
-        validate: validate.required().email(),
-      },
-      {
-        name: "password",
-        type: "password",
-        validate: validate.required().passwordComplexity(),
-      },
-    ],
-  }}{%endraw%}
-  onSubmit={values => alert(JSON.stringify(values))}
-/>
-```
-
-If `<Form>` doesn't have any children elements then it will use the [`metabase/components/StandardLayout`](https://github.com/metabase/metabase/blob/master/frontend/src/metabase/components/StandardLayout) component to provide a default form layout.
-
-The schema for this object is defined in [`Form.jsx`](https://github.com/metabase/metabase/blob/master/frontend/src/metabase/containers/Form.jsx#L41-L60).
-
-`fields` and `initial` (for initial values) can be provided directly or as functions that dynamically compute them based on the current form state and additional props.
-
-```javascript
-{
-  "fields": (values) => [
-    { name: "a", type:  }
-```
-
-`initial`, `normalize`, and `validate` properties can be provided at the top-level, or per-field. They can also be provided as props to the `<Form>` and `<FormField>` components For definitions can be provided
-
-### Custom Layout
-
-Form definition can also be provided via `<FormField>` React elements (exported from the same `metabase/containers/Form` module), which will also serve as the layout (this uses the [`metabase/components/CustomLayout`](https://github.com/metabase/metabase/blob/master/frontend/src/metabase/components/CustomLayout))
-
-```javascript
-import Form, { FormField, FormFooter } from "metabase/containers/Form";
-
-<Form onSubmit={values => alert(JSON.stringify(values))}>
-  <FormField
-    name="email"
-    placeholder="bob@metabase.com"
-    validate={validate.required()}
-  />
-  <FormField
-    name="password"
-    type="password"
-    validate={validate.required().passwordComplexity()}
-  />
-  <FormFooter />
-</Form>;
-```
-
-You can also provide both the `form` prop and children `<FormField>` elements, in which case the `form` prop will be merged with the `<FormField>`s' props.
-
-### Custom Widgets
-
-Built-in field `type`s are defined in [metabase/components/form/FormWidget](https://github.com/metabase/metabase/blob/master/frontend/src/metabase/components/form/FormWidget.jsx#L17-L28). You can also provide a React component as the `type` property.
-
-### Validation
-
-You might have noticed the `validate` API above. These are simple chainable validators compatible with this form library, and are provided by [`metabase/lib/validate`](https://github.com/metabase/metabase/blob/master/frontend/src/metabase/lib/validate.js). You can add additional validators in that file.
-
-Server-side validation and other errors are returned in a standard format understood by `<Form>`.
-
-Field-level errors:
-
-```json
-{ "errors": { "field_name": "error message" } }
-```
-
-Top-level errors:
-
-```json
-{ "message": "error message" }
-```
-
-### Integration with Entities
-
-The Form library is integrated with Metabase's [Entities](https://github.com/metabase/metabase/wiki/Frontend:-Entity-Loaders) system (via the [`EntityForm`](https://github.com/metabase/metabase/blob/master/frontend/src/metabase/entities/containers/EntityForm.jsx) component), so that every entity includes a `Form` component that can be used like so:
-
-```javascript
-<Users.Form />
-```
-
-which uses the default `form` defined on the entity, e.x.
-
-```javascript
-const Users = createEntity({
-  name: "users",
-  path: "/api/user",
-
-  form: {
-    fields: [
-      { name: "email" }
-    ]
-  }
-
-  // Alternatively, it will take the first form from the `forms` object:
-  // form: {
-  //  default: {
-  //    fields: [
-  //      { name: "email" }
-  //    ]
-  //  }
-  // }
-}
-```
-
-You can also explicitly pass a different form object:
-
-```javascript
-<Users.Form form={Users.forms.passwordReset} />
-```
-
-Entity `Form`s will automatically be wired up to the correct REST endpoints for creating or updating entities.
-
-If you need to load an object first, they compose nicely with the Entities `Loader` render prop:
-
-```javascript
-<Users.Load id={props.params.userId}>
-  {({ user }) => <Users.Form user={user} />}
-</Users.Load>
-```
-
-Or higher-order component:
-
-```javascript
-Users.load({ id: (state, props) => props.params.userId })(Users.Form);
-```
-
 ## Style Guide
 
 ### Set up Prettier
@@ -268,6 +126,7 @@ We use ESLint to enforce additional rules. It is integrated into the Webpack bui
 For the most part we follow the [Airbnb React/JSX Style Guide](https://github.com/airbnb/javascript/tree/master/react). ESLint and Prettier should take care of a majority of the rules in the Airbnb style guide. Exceptions will be noted in this document.
 
 - Prefer React [function components over class components](https://reactjs.org/docs/components-and-props.html#function-and-class-components)
+- Avoid creating new components within the `containers` folder, as this approach has been deprecated. Instead, store both connected and view components in the `components` folder for a more unified and efficient organization. If a connected component grows substantially in size and you need to extract a view component, opt for using the `View` suffix.
 - For control components, typically we use `value` and `onChange`. Controls that have options (e.x. `Radio`, `Select`) usually take an `options` array of objects with `name` and `value` properties.
 - Components named like `FooModal` and `FooPopover` typically refer to the modal/popover _content_ which should be used inside a `Modal`/`ModalWithTrigger` or `Popover`/`PopoverWithTrigger`
 - Components named like `FooWidget` typically include a `FooPopover` inside a `PopoverWithTrigger` with some sort of trigger element, often `FooName`
@@ -400,7 +259,7 @@ function getFoo(a, b, c) {
 }
 ```
 
-- Be conservative with what comments you add to the codebase. Comments shouldn't be used as reminders or as TODOs--record those by creating a new issue in Github. Ideally, code should be written in such a way that it explains itself clearly. When it does not, you should first try rewriting the code. If for whatever reason you are unable to write something clearly, add a comment to explain the "why".
+- Be conservative with what comments you add to the codebase. Comments shouldn't be used as reminders or as todos--record those by creating a new issue in Github. Ideally, code should be written in such a way that it explains itself clearly. When it does not, you should first try rewriting the code. If for whatever reason you are unable to write something clearly, add a comment to explain the "why".
 
 ```javascript
 
@@ -503,7 +362,7 @@ When dealing with business logic you don't want to be concerned with the specifi
 
 ```css
 .Button.Button--primary {
-  color: -var(--color-brand);
+  color: -var(--mb-color-brand);
 }
 ```
 
@@ -511,7 +370,7 @@ When dealing with business logic you don't want to be concerned with the specifi
 
 ```css
 .text-brand {
-  color: -var(--color-brand);
+  color: -var(--mb-color-brand);
 }
 ```
 
@@ -530,7 +389,7 @@ const Foo = ({ color ) =>
 
 ```css
 :local(.primary) {
-  color: -var(--color-brand);
+  color: -var(--mb-color-brand);
 }
 ```
 
@@ -545,23 +404,8 @@ const Foo = () => <div className={style.primary} />;
 ```javascript
 import styled from "@emotion/styled";
 
-const FooWrapper = styled.div`
-  color: ${props => props.color};
-`;
-
-const Bar = ({ color }) => <Foo color={color} />;
-```
-
-### Emotion + [styled-system](https://styled-system.com/)
-
-e.x.
-
-```javascript
-import styled from "@emotion/styled";
-import { color } from "styled-system";
-
 const Foo = styled.div`
-  ${color}
+  color: ${props => props.color};
 `;
 
 const Bar = ({ color }) => <Foo color={color} />;
@@ -577,17 +421,105 @@ In Metabase core, they are visually responsive: they appear above or below the e
 
 #### When creating custom questions
 
-1. From home, click on `Ask a question`
-2. Click on `Custom question`
-3. 👀 The option picker next to `Pick your starting data` is a `<Popover />`.
-4. Choose `Sample Database`
-5. Choose any of the tables, for example `People`
+1. From home, click on `New` and then `Question`
+2. 👀 The option picker that automatically opened next to `Pick your starting data` is a `<Popover />`.
+3. Choose `Sample Database` if not already selected
+4. Choose any of the tables, for example `People`
 
 Here, clicking on the following will open `<Popover />` components:
 
-- `Columns` (right-hand side of section labeled `Data`)
+- `Pick columns` (arrow on the right-hand side of a `FieldsPicker` control in the section labeled `Data`)
 - Gray icon of a grid with + below section labeled `Data`
 - `Add filters to narrow your answers`
 - `Pick the metric you want to see`
 - `Pick a column to group by`
 - `Sort` icon with arrows pointing up and down above `Visualize` button
+
+## Unit testing
+
+### Setup pattern
+
+We use the following pattern to unit test components:
+
+```tsx
+import React from "react";
+import userEvent from "@testing-library/user-event";
+import { Collection } from "metabase-types/api";
+import { createMockCollection } from "metabase-types/api/mocks";
+import { renderWithProviders, screen } from "__support__/ui";
+import CollectionHeader from "./CollectionHeader";
+
+interface SetupOpts {
+  collection: Collection;
+}
+
+const setup = ({ collection }: SetupOpts) => {
+  const onUpdateCollection = jest.fn();
+
+  renderWithProviders(
+    <CollectionHeader
+      collection={collection}
+      onUpdateCollection={onUpdateCollection}
+    />,
+  );
+
+  return { onUpdateCollection };
+};
+
+describe("CollectionHeader", () => {
+  it("should be able to update the name of the collection", () => {
+    const collection = createMockCollection({
+      name: "Old name",
+    });
+
+    const { onUpdateCollection } = setup({
+      collection,
+    });
+
+    await userEvent.clear(screen.getByDisplayValue("Old name"));
+    await userEvent.type(screen.getByPlaceholderText("Add title"), "New title");
+    await userEvent.tab();
+
+    expect(onUpdateCollection).toHaveBeenCalledWith({
+      ...collection,
+      name: "New name",
+    });
+  });
+});
+```
+
+Key points:
+
+- `setup` function
+- `renderWithProviders` adds providers used by the app, including `redux`
+
+### Request mocking
+
+We use [`fetch-mock`](https://www.npmjs.com/package/fetch-mock) to mock requests:
+
+```tsx
+import fetchMock from "fetch-mock";
+import { setupCollectionsEndpoints } from "__support__/server-mocks";
+
+interface SetupOpts {
+  collections: Collection[];
+}
+
+const setup = ({ collections }: SetupOpts) => {
+  setupCollectionsEndpoints({ collections });
+
+  // renderWithProviders and other setup
+};
+
+describe("Component", () => {
+  it("renders correctly", async () => {
+    setup();
+    expect(await screen.findByText("Collection")).toBeInTheDocument();
+  });
+});
+```
+
+Key points:
+
+- `setup` function
+- Call helpers from `__support__/server-mocks` to setup endpoints for your data

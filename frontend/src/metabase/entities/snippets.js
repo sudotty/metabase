@@ -1,35 +1,13 @@
-import { t } from "ttag";
+import {
+  snippetApi,
+  useGetSnippetQuery,
+  useListSnippetsQuery,
+} from "metabase/api";
+import { createEntity, entityCompatibleQuery } from "metabase/lib/entities";
 
-import { createEntity } from "metabase/lib/entities";
-import validate from "metabase/lib/validate";
-import { canonicalCollectionId } from "metabase/collections/utils";
-
-const formFields = [
-  {
-    name: "content",
-    title: t`Enter some SQL here so you can reuse it later`,
-    placeholder: "AND canceled_at IS null\nAND account_type = 'PAID'",
-    type: "text",
-    className:
-      "Form-input full text-monospace text-normal text-small bg-light text-spaced",
-    rows: 4,
-    autoFocus: true,
-    validate: validate.required().maxLength(10000),
-  },
-  {
-    name: "name",
-    title: t`Give your snippet a name`,
-    placeholder: t`Current Customers`,
-    validate: validate.required().maxLength(100),
-  },
-  {
-    name: "description",
-    title: t`Add a description`,
-    placeholder: t`It's optional but oh, so helpful`,
-    validate: validate.maxLength(500),
-  },
-];
-
+/**
+ * @deprecated use "metabase/api" instead
+ */
 const Snippets = createEntity({
   name: "snippets",
   nameOne: "snippet",
@@ -38,28 +16,47 @@ const Snippets = createEntity({
     getFetched: (state, props) =>
       getFetched(state, props) || getObject(state, props),
   }),
-  forms: {
-    withoutVisibleCollectionPicker: {
-      fields: [
-        ...formFields,
-        {
-          name: "collection_id",
-          hidden: true,
-        },
-      ],
-    },
-    withVisibleCollectionPicker: {
-      fields: [
-        ...formFields,
-        {
-          name: "collection_id",
-          title: t`Folder this should be in`,
-          type: "snippetCollection",
-          normalize: canonicalCollectionId,
-        },
-      ],
+
+  rtk: {
+    getUseGetQuery: () => ({
+      useGetQuery,
+    }),
+    useListQuery: useListSnippetsQuery,
+  },
+
+  api: {
+    list: (entityQuery, dispatch) =>
+      entityCompatibleQuery(
+        entityQuery,
+        dispatch,
+        snippetApi.endpoints.listSnippets,
+      ),
+    get: (entityQuery, options, dispatch) =>
+      entityCompatibleQuery(
+        entityQuery.id,
+        dispatch,
+        snippetApi.endpoints.getSnippet,
+      ),
+    create: (entityQuery, dispatch) =>
+      entityCompatibleQuery(
+        entityQuery,
+        dispatch,
+        snippetApi.endpoints.createSnippet,
+      ),
+    update: (entityQuery, dispatch) =>
+      entityCompatibleQuery(
+        entityQuery,
+        dispatch,
+        snippetApi.endpoints.updateSnippet,
+      ),
+    delete: () => {
+      throw new TypeError("Snippets.api.delete is not supported");
     },
   },
 });
+
+const useGetQuery = ({ id }, options) => {
+  return useGetSnippetQuery(id, options);
+};
 
 export default Snippets;

@@ -1,16 +1,24 @@
-import React, { ReactNode } from "react";
+import cx from "classnames";
+import type { ReactNode } from "react";
 import { t } from "ttag";
-import SidebarHeader from "../SidebarHeader";
+
 import {
-  SidebarContentRoot,
-  SidebarContentMain,
-  FooterButton,
-} from "./SidebarContent.styled";
+  Box,
+  type BoxProps,
+  Flex,
+  type FlexProps,
+  type IconName,
+} from "metabase/ui";
+
+import SidebarHeader from "../SidebarHeader";
+import ViewButton from "../view/ViewButton";
+
+import SidebarContentS from "./SidebarContent.module.css";
 
 type Props = {
   className?: string;
   title?: string;
-  icon?: string;
+  icon?: IconName;
   color?: string;
   onBack?: () => void;
   onClose?: () => void;
@@ -18,6 +26,28 @@ type Props = {
   doneButtonText?: string;
   footer?: ReactNode;
   children?: ReactNode;
+  "data-testid"?: string;
+};
+
+const SidebarContentMain = ({ children, ...props }: BoxProps) => {
+  return (
+    <Box className={SidebarContentS.SidebarContentMain} {...props}>
+      {children}
+    </Box>
+  );
+};
+
+const SidebarContentRoot = ({ className, children, ...props }: FlexProps) => {
+  return (
+    <Flex
+      direction="column"
+      justify="space-between"
+      className={cx(SidebarContentS.SidebarContentRoot, className)}
+      {...props}
+    >
+      {children}
+    </Flex>
+  );
 };
 
 function SidebarContent({
@@ -30,18 +60,24 @@ function SidebarContent({
   onDone,
   doneButtonText = t`Done`,
   footer = onDone ? (
-    <FooterButton color={color} onClick={onDone}>
+    <ViewButton
+      className={SidebarContentS.FooterButton}
+      color={color}
+      onClick={onDone}
+      active
+    >
       {doneButtonText}
-    </FooterButton>
+    </ViewButton>
   ) : null,
   children,
+  "data-testid": dataTestId,
 }: Props) {
   return (
-    <SidebarContentRoot className={className}>
+    <SidebarContentRoot data-testid={dataTestId} className={className}>
       <SidebarContentMain data-testid="sidebar-content">
         {(title || icon || onBack) && (
           <SidebarHeader
-            className="mx3 my2 pt1"
+            className={SidebarContentS.SidebarContentHeader}
             title={title}
             icon={icon}
             onBack={onBack}
@@ -55,4 +91,14 @@ function SidebarContent({
   );
 }
 
-export default SidebarContent;
+export const PaneContent = (props: BoxProps) => {
+  return <Box px="lg" {...props} />;
+};
+
+// eslint-disable-next-line import/no-default-export -- deprecated usage
+export default Object.assign(SidebarContent, {
+  Root: SidebarContentRoot,
+  Header: SidebarHeader,
+  Content: SidebarContentMain,
+  Pane: PaneContent,
+});

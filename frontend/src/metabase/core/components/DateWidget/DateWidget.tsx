@@ -1,14 +1,10 @@
-import React, {
-  forwardRef,
-  InputHTMLAttributes,
-  Ref,
-  useCallback,
-  useState,
-} from "react";
-import { Moment } from "moment";
+import type { Moment } from "moment-timezone"; // eslint-disable-line no-restricted-imports -- deprecated usage
+import type { InputHTMLAttributes, Ref } from "react";
+import { forwardRef, useCallback, useState } from "react";
+
+import TippyPopover from "metabase/components/Popover/TippyPopover";
 import DateInput from "metabase/core/components/DateInput";
 import DateSelector from "metabase/core/components/DateSelector";
-import TippyPopover from "metabase/components/Popover/TippyPopover";
 
 export type DateWidgetAttributes = Omit<
   InputHTMLAttributes<HTMLDivElement>,
@@ -18,13 +14,26 @@ export type DateWidgetAttributes = Omit<
 export interface DateWidgetProps extends DateWidgetAttributes {
   value?: Moment;
   hasTime?: boolean;
+  dateFormat?: string;
+  timeFormat?: string;
   error?: boolean;
   fullWidth?: boolean;
   onChange?: (date?: Moment) => void;
+  onHasTimeChange?: (hasTime: boolean) => void;
 }
 
 const DateWidget = forwardRef(function DateWidget(
-  { value, hasTime, error, fullWidth, onChange, ...props }: DateWidgetProps,
+  {
+    value,
+    hasTime,
+    dateFormat,
+    timeFormat,
+    error,
+    fullWidth,
+    onChange,
+    onHasTimeChange,
+    ...props
+  }: DateWidgetProps,
   ref: Ref<HTMLDivElement>,
 ): JSX.Element {
   const [isOpened, setIsOpened] = useState(false);
@@ -39,19 +48,19 @@ const DateWidget = forwardRef(function DateWidget(
 
   return (
     <TippyPopover
-      trigger="manual"
-      placement="bottom-start"
       visible={isOpened}
-      interactive
+      placement="bottom-start"
       content={
         <DateSelector
           value={value}
           hasTime={hasTime}
+          timeFormat={timeFormat}
           onChange={onChange}
+          onHasTimeChange={onHasTimeChange}
           onSubmit={handleClose}
         />
       }
-      onHide={handleClose}
+      onClickOutside={handleClose}
     >
       <DateInput
         {...props}
@@ -59,6 +68,8 @@ const DateWidget = forwardRef(function DateWidget(
         value={value}
         hasTime={hasTime}
         hasCalendar={true}
+        dateFormat={dateFormat}
+        timeFormat={timeFormat}
         error={error}
         fullWidth={fullWidth}
         onChange={onChange}
@@ -68,4 +79,5 @@ const DateWidget = forwardRef(function DateWidget(
   );
 });
 
+// eslint-disable-next-line import/no-default-export -- deprecated usage
 export default DateWidget;

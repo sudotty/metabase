@@ -1,5 +1,5 @@
-import React from "react";
-import { ComponentStory } from "@storybook/react";
+import type { StoryFn } from "@storybook/react";
+
 import ExternalLink from "./ExternalLink";
 
 export default {
@@ -7,12 +7,15 @@ export default {
   component: ExternalLink,
 };
 
-const Template: ComponentStory<typeof ExternalLink> = args => {
+const Template: StoryFn<typeof ExternalLink> = args => {
   return <ExternalLink {...args} />;
 };
 
-export const Default = Template.bind({});
-Default.args = {
-  href: "/",
-  children: "Link",
+export const Default = {
+  render: Template,
+
+  args: {
+    href: "/",
+    children: "Link",
+  },
 };

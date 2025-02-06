@@ -1,13 +1,15 @@
 /* eslint-disable react/prop-types */
-import React, { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Responsive as ReactGridLayout } from "react-grid-layout";
+
+import { useMantineTheme } from "metabase/ui";
 
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
 
 import { generateGridBackground } from "./utils";
 
-function GridLayout({
+export function GridLayout({
   items,
   itemRenderer,
   breakpoints,
@@ -20,6 +22,8 @@ function GridLayout({
   onLayoutChange,
   ...props
 }) {
+  const theme = useMantineTheme();
+
   const [currentBreakpoint, setCurrentBreakpoint] = useState(
     ReactGridLayout.utils.getBreakpointFromWidth(breakpoints, gridWidth),
   );
@@ -44,20 +48,20 @@ function GridLayout({
     setCurrentBreakpoint(newBreakpoint);
   }, []);
 
-  const margin = useMemo(() => marginMap[currentBreakpoint], [
-    marginMap,
-    currentBreakpoint,
-  ]);
+  const margin = useMemo(
+    () => marginMap[currentBreakpoint],
+    [marginMap, currentBreakpoint],
+  );
 
-  const layout = useMemo(() => layouts[currentBreakpoint], [
-    layouts,
-    currentBreakpoint,
-  ]);
+  const layout = useMemo(
+    () => layouts[currentBreakpoint],
+    [layouts, currentBreakpoint],
+  );
 
-  const cols = useMemo(() => columnsMap[currentBreakpoint], [
-    columnsMap,
-    currentBreakpoint,
-  ]);
+  const cols = useMemo(
+    () => columnsMap[currentBreakpoint],
+    [columnsMap, currentBreakpoint],
+  );
 
   const cellSize = useMemo(() => {
     const marginSlotsCount = cols - 1;
@@ -78,9 +82,10 @@ function GridLayout({
         item,
         gridItemWidth,
         breakpoint: currentBreakpoint,
+        totalNumGridCols: cols,
       });
     },
-    [layout, cellSize, itemRenderer, currentBreakpoint],
+    [layout, cellSize, itemRenderer, currentBreakpoint, cols],
   );
 
   const height = useMemo(() => {
@@ -94,8 +99,20 @@ function GridLayout({
   }, [cellSize.height, layout, margin, isEditing]);
 
   const background = useMemo(
-    () => generateGridBackground({ cellSize, margin, cols, gridWidth }),
-    [cellSize, gridWidth, margin, cols],
+    () =>
+      generateGridBackground({
+        cellSize,
+        margin,
+        cols,
+        gridWidth,
+
+        // We cannot use CSS variables here, as the svg data in background-image
+        // lives a separate style tree from the rest of the app.
+        cellStrokeColor:
+          theme.other?.dashboard?.gridBorderColor ??
+          theme.fn.themeColor("border"),
+      }),
+    [cellSize, gridWidth, margin, cols, theme],
   );
 
   const style = useMemo(
@@ -132,5 +149,3 @@ function GridLayout({
     </ReactGridLayout>
   );
 }
-
-export default GridLayout;

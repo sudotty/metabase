@@ -1,24 +1,20 @@
-/* eslint-disable react/prop-types */
-import { getIn } from "icepick";
+import _ from "underscore";
 
-import ChartSettingInput from "metabase/visualizations/components/settings/ChartSettingInput";
-import ChartSettingInputGroup from "metabase/visualizations/components/settings/ChartSettingInputGroup";
-import ChartSettingInputNumeric from "metabase/visualizations/components/settings/ChartSettingInputNumeric";
-import ChartSettingRadio from "metabase/visualizations/components/settings/ChartSettingRadio";
-import ChartSettingSelect from "metabase/visualizations/components/settings/ChartSettingSelect";
-import ChartSettingToggle from "metabase/visualizations/components/settings/ChartSettingToggle";
-import ChartSettingSegmentedControl from "metabase/visualizations/components/settings/ChartSettingSegmentedControl";
-import ChartSettingFieldPicker from "metabase/visualizations/components/settings/ChartSettingFieldPicker";
-import ChartSettingFieldsPicker from "metabase/visualizations/components/settings/ChartSettingFieldsPicker";
-import ChartSettingFieldsPartition from "metabase/visualizations/components/settings/ChartSettingFieldsPartition";
-import ChartSettingColorPicker from "metabase/visualizations/components/settings/ChartSettingColorPicker";
+import { ChartSettingColorPicker } from "metabase/visualizations/components/settings/ChartSettingColorPicker";
 import ChartSettingColorsPicker from "metabase/visualizations/components/settings/ChartSettingColorsPicker";
-
-import * as MetabaseAnalytics from "metabase/lib/analytics";
+import { ChartSettingFieldPicker } from "metabase/visualizations/components/settings/ChartSettingFieldPicker";
+import { ChartSettingFieldsPartition } from "metabase/visualizations/components/settings/ChartSettingFieldsPartition";
+import ChartSettingFieldsPicker from "metabase/visualizations/components/settings/ChartSettingFieldsPicker";
+import { ChartSettingInput } from "metabase/visualizations/components/settings/ChartSettingInput";
+import { ChartSettingInputNumeric } from "metabase/visualizations/components/settings/ChartSettingInputNumeric";
+import { ChartSettingMultiSelect } from "metabase/visualizations/components/settings/ChartSettingMultiSelect";
+import { ChartSettingRadio } from "metabase/visualizations/components/settings/ChartSettingRadio";
+import { ChartSettingSegmentedControl } from "metabase/visualizations/components/settings/ChartSettingSegmentedControl";
+import { ChartSettingSelect } from "metabase/visualizations/components/settings/ChartSettingSelect";
+import { ChartSettingToggle } from "metabase/visualizations/components/settings/ChartSettingToggle";
 
 const WIDGETS = {
   input: ChartSettingInput,
-  inputGroup: ChartSettingInputGroup,
   number: ChartSettingInputNumeric,
   radio: ChartSettingRadio,
   select: ChartSettingSelect,
@@ -29,6 +25,7 @@ const WIDGETS = {
   fieldsPartition: ChartSettingFieldsPartition,
   color: ChartSettingColorPicker,
   colors: ChartSettingColorsPicker,
+  multiselect: ChartSettingMultiSelect,
 };
 
 export function getComputedSettings(
@@ -123,33 +120,50 @@ function getSettingWidget(
 ) {
   const settingDef = settingDefs[settingId];
   const value = computedSettings[settingId];
-  const onChange = value => {
+  const onChange = (value, question) => {
     const newSettings = { [settingId]: value };
     for (const settingId of settingDef.writeDependencies || []) {
       newSettings[settingId] = computedSettings[settingId];
     }
-    onChangeSettings(newSettings);
+    for (const settingId of settingDef.eraseDependencies || []) {
+      newSettings[settingId] = null;
+    }
+    onChangeSettings(newSettings, question);
+    settingDef.onUpdate?.(value, extra);
   };
   if (settingDef.useRawSeries && object._raw) {
+    extra.transformedSeries = object;
     object = object._raw;
   }
   return {
     ...settingDef,
     id: settingId,
     value: value,
+    section: settingDef.getSection
+      ? settingDef.getSection(object, computedSettings, extra)
+      : settingDef.section,
     title: settingDef.getTitle
       ? settingDef.getTitle(object, computedSettings, extra)
       : settingDef.title,
     hidden: settingDef.getHidden
       ? settingDef.getHidden(object, computedSettings, extra)
       : settingDef.hidden || false,
+    marginBottom: settingDef.getMarginBottom
+      ? settingDef.getMarginBottom(object, computedSettings, extra)
+      : settingDef.marginBottom,
     disabled: settingDef.getDisabled
       ? settingDef.getDisabled(object, computedSettings, extra)
       : settingDef.disabled || false,
     props: {
       ...(settingDef.props ? settingDef.props : {}),
       ...(settingDef.getProps
-        ? settingDef.getProps(object, computedSettings, onChange, extra)
+        ? settingDef.getProps(
+            object,
+            computedSettings,
+            onChange,
+            extra,
+            onChangeSettings,
+          )
         : {}),
     },
     set: settingId in storedSettings,
@@ -197,9 +211,6 @@ export function getPersistableDefaultSettings(settingsDefs, completeSettings) {
 }
 
 export function updateSettings(storedSettings, changedSettings) {
-  for (const key of Object.keys(changedSettings)) {
-    MetabaseAnalytics.trackStructEvent("Chart Settings", "Change Setting", key);
-  }
   const newSettings = {
     ...storedSettings,
     ...changedSettings,
@@ -211,28 +222,6 @@ export function updateSettings(storedSettings, changedSettings) {
     }
   }
   return newSettings;
-}
-
-// Merge two settings objects together.
-// Settings from the second argument take precedence over the first.
-export function mergeSettings(first = {}, second = {}) {
-  // Note: This hardcoded list of all nested settings is potentially fragile,
-  // but both the list of nested settings and the keys used are very stable.
-  const nestedSettings = ["series_settings", "column_settings"];
-  const merged = { ...first, ...second };
-  for (const key of nestedSettings) {
-    // only set key if one of the objects to be merged has that key set
-    if (first[key] != null || second[key] != null) {
-      merged[key] = {};
-      for (const nestedKey of Object.keys({ ...first[key], ...second[key] })) {
-        merged[key][nestedKey] = mergeSettings(
-          getIn(first, [key, nestedKey]) || {},
-          getIn(second, [key, nestedKey]) || {},
-        );
-      }
-    }
-  }
-  return merged;
 }
 
 export function getClickBehaviorSettings(settings) {
@@ -265,4 +254,27 @@ function getColumnClickBehavior(columnSettings) {
         },
       };
     }, null);
+}
+
+const KEYS_TO_COMPARE = new Set([
+  "number_style",
+  "currency",
+  "currency_style",
+  "number_separators",
+  "decimals",
+  "scale",
+  "prefix",
+  "suffix",
+]);
+
+export function getLineAreaBarComparisonSettings(columnSettings) {
+  return _.pick(columnSettings, (value, key) => {
+    if (!KEYS_TO_COMPARE.has(key)) {
+      return false;
+    }
+    if ((key === "prefix" || key === "suffix") && value === "") {
+      return false;
+    }
+    return true;
+  });
 }

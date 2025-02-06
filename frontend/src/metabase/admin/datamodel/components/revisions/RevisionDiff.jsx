@@ -1,46 +1,48 @@
-import React, { Component } from "react";
+import cx from "classnames";
 import PropTypes from "prop-types";
+import { Component } from "react";
 
-import TextDiff from "./TextDiff";
+import CS from "metabase/css/core/index.css";
+
 import QueryDiff from "./QueryDiff";
-
-import Icon from "metabase/components/Icon";
+import { EditIcon, ErrorIcon, SuccessIcon } from "./RevisionDiff.styled";
+import TextDiff from "./TextDiff";
 
 export default class RevisionDiff extends Component {
   static propTypes = {
     property: PropTypes.string.isRequired,
     diff: PropTypes.object.isRequired,
-    tableMetadata: PropTypes.object.isRequired,
+    tableId: PropTypes.number.isRequired,
   };
 
   render() {
     const {
       diff: { before, after },
-      tableMetadata,
+      tableId,
     } = this.props;
 
     let icon;
     if (before != null && after != null) {
-      icon = <Icon name="pencil" className="text-brand" size={16} />;
+      icon = <EditIcon name="pencil" size={16} />;
     } else if (before != null) {
-      icon = <Icon name="add" className="text-error" size={16} />;
+      icon = <ErrorIcon name="add" size={16} />;
     } else {
       // TODO: "minus" icon
-      icon = <Icon name="add" className="text-green" size={16} />;
+      icon = <SuccessIcon name="add" size={16} />;
     }
 
     return (
       <div
-        className="bordered rounded my2"
+        className={cx(CS.bordered, CS.rounded, CS.my2)}
         style={{ borderWidth: 2, overflow: "hidden", maxWidth: 860 }}
       >
-        <div className="flex align-center scroll-x scroll-show scroll-show-horizontal">
-          <div className="m3" style={{ lineHeight: 0 }}>
+        <div className={cx(CS.flex, CS.alignCenter, CS.scrollX, CS.scrollShow)}>
+          <div className={CS.m3} style={{ lineHeight: 0 }}>
             {icon}
           </div>
           <div>
             {this.props.property === "definition" ? (
-              <QueryDiff diff={this.props.diff} tableMetadata={tableMetadata} />
+              <QueryDiff diff={this.props.diff} tableId={tableId} />
             ) : (
               <TextDiff diff={this.props.diff} />
             )}

@@ -1,71 +1,42 @@
 (ns metabase.models.native-query-snippet.permissions
   "NativeQuerySnippets have different permissions implementations. In Metabase CE, anyone can read/edit/create all
-  NativeQuerySnippets. EE has a more advanced implementation.
+  NativeQuerySnippets if they have native query perms for at least one database. EE has a more advanced implementation."
+  (:require
+   [metabase.api.common :as api]
+   [metabase.permissions.core :as perms]
+   [metabase.premium-features.core :refer [defenterprise]]))
 
-  The code in this namespace provides sort of a strategy pattern interface to the underlying permissions operations.
-  The default implementation is defined below and can be swapped out at runtime with the more advanced EE
-  implementation."
-  (:require [clojure.tools.logging :as log]
-            [potemkin.types :as p.types]
-            [pretty.core :refer [PrettyPrintable]]))
+(defn has-any-native-permissions?
+  "Checks whether the current user has native query permissions for any database."
+  []
+  (perms/user-has-any-perms-of-type? api/*current-user-id* :perms/create-queries))
 
-(p.types/defprotocol+ PermissionsImpl
-  "Protocol for implementing the permissions logic for NativeQuerySnippets."
-  (can-read?* [this snippet] [this model id]
-    "Can the current User read this `snippet`?")
-  (can-write?*  [this snippet] [this model id]
-    "Can the current User edit this `snippet`?")
-  (can-create?* [this model m]
-    "Can the current User save a new Snippet with the values in `m`?")
-  (can-update?* [this snippet changes]
-    "Can the current User apply a map of `changes` to a `snippet`?"))
-
-(defonce ^:private impl (atom nil))
-
-(defn set-impl!
-  "Change the implementation used for NativeQuerySnippet permissions. `new-impl` must satisfy the `PermissionsImpl`
-  protocol defined above."
-  [new-impl]
-  (log/debugf "NativeQueryPermissions impl set to %s" (pr-str new-impl))
-  (reset! impl new-impl))
-
-(def default-impl
-  "Default 'simple' permissions implementation for NativeQuerySnippets for Metabase CE."
-  (reify
-    PrettyPrintable
-    (pretty [_]
-      `default-impl)
-    PermissionsImpl
-    (can-read?* [_ _] true)
-    (can-read?* [_ _ _] true)
-    (can-write?* [_ _] true)
-    (can-write?* [_ _ _] true)
-    (can-create?* [_ _ _] true)
-    (can-update?* [_ _ _] true)))
-
-(when-not @impl
-  (set-impl! default-impl))
-
-(defn can-read?
+(defenterprise can-read?
   "Can the current User read this `snippet`?"
-  ([snippet]
-   (can-read?* @impl snippet))
-  ([model id]
-   (can-read?* @impl model id)))
+  metabase-enterprise.snippet-collections.models.native-query-snippet.permissions
+  ([_]
+   (has-any-native-permissions?))
 
-(defn can-write?
+  ([_ _]
+   (has-any-native-permissions?)))
+
+(defenterprise can-write?
   "Can the current User edit this `snippet`?"
-  ([snippet]
-   (can-write?* @impl snippet))
-  ([model id]
-   (can-write?* @impl model id)))
+  metabase-enterprise.snippet-collections.models.native-query-snippet.permissions
+  ([_]
+   (has-any-native-permissions?))
 
-(defn can-create?
+  ([_ _]
+   (has-any-native-permissions?)))
+
+(defenterprise can-create?
   "Can the current User save a new Snippet with the values in `m`?"
-  [model m]
-  (can-create?* @impl model m))
+  metabase-enterprise.snippet-collections.models.native-query-snippet.permissions
+  [_ _]
+  (has-any-native-permissions?))
 
-(defn can-update?
+(defenterprise can-update?
   "Can the current User apply a map of `changes` to a `snippet`?"
-  [snippet changes]
-  (can-update?* @impl snippet changes))
+  metabase-enterprise.snippet-collections.models.native-query-snippet.permissions
+  [_ _]
+  (has-any-native-permissions?))

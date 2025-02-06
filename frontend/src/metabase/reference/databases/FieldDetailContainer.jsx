@@ -1,23 +1,25 @@
 /* eslint "react/prop-types": "warn" */
-import React, { Component } from "react";
+import cx from "classnames";
 import PropTypes from "prop-types";
-import { connect } from "react-redux";
+import { Component } from "react";
 
-import FieldSidebar from "./FieldSidebar";
 import SidebarLayout from "metabase/components/SidebarLayout";
-import FieldDetail from "metabase/reference/databases/FieldDetail";
-
+import CS from "metabase/css/core/index.css";
+import { connect } from "metabase/lib/redux";
 import * as metadataActions from "metabase/redux/metadata";
+import FieldDetail from "metabase/reference/databases/FieldDetail";
 import * as actions from "metabase/reference/reference";
 import { getMetadata } from "metabase/selectors/metadata";
 
 import {
   getDatabase,
-  getTable,
-  getField,
   getDatabaseId,
+  getField,
   getIsEditing,
+  getTable,
 } from "../selectors";
+
+import FieldSidebar from "./FieldSidebar";
 
 const mapStateToProps = (state, props) => ({
   database: getDatabase(state, props),
@@ -33,8 +35,7 @@ const mapDispatchToProps = {
   ...actions,
 };
 
-@connect(mapStateToProps, mapDispatchToProps)
-export default class FieldDetailContainer extends Component {
+class FieldDetailContainer extends Component {
   static propTypes = {
     params: PropTypes.object.isRequired,
     location: PropTypes.object.isRequired,
@@ -70,7 +71,7 @@ export default class FieldDetailContainer extends Component {
 
     return (
       <SidebarLayout
-        className="flex-full relative"
+        className={cx(CS.flexFull, CS.relative)}
         style={isEditing ? { paddingTop: "43px" } : {}}
         sidebar={
           <FieldSidebar database={database} table={table} field={field} />
@@ -81,3 +82,8 @@ export default class FieldDetailContainer extends Component {
     );
   }
 }
+
+export default connect(
+  mapStateToProps,
+  mapDispatchToProps,
+)(FieldDetailContainer);

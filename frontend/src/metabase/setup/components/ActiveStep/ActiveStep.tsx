@@ -1,24 +1,30 @@
-import React, { ReactNode } from "react";
+import type { ReactNode } from "react";
+
 import {
-  StepRoot,
-  StepTitle,
   StepLabel,
   StepLabelText,
+  StepRoot,
+  StepTitle,
 } from "./ActiveStep.styled";
 
-export interface ActiveStepProps {
+interface ActiveStepProps {
   title: string;
   label: number;
   children?: ReactNode;
 }
 
-const ActiveStep = ({
+export const ActiveStep = ({
   title,
   label,
   children,
 }: ActiveStepProps): JSX.Element => {
   return (
-    <StepRoot>
+    <StepRoot
+      role="listitem"
+      aria-label={title}
+      aria-current="step"
+      data-testid="setup-step"
+    >
       <StepTitle>{title}</StepTitle>
       <StepLabel>
         <StepLabelText>{label}</StepLabelText>
@@ -27,5 +33,3 @@ const ActiveStep = ({
     </StepRoot>
   );
 };
-
-export default ActiveStep;

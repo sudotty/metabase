@@ -1,5 +1,7 @@
 (ns metabase.driver.sql-jdbc.common
-  (:require [clojure.string :as str]))
+  (:require
+   [clojure.string :as str]
+   [metabase.util :as u]))
 
 (def ^:private valid-separator-styles #{:url :comma :semicolon})
 
@@ -70,14 +72,14 @@
   {:pre [(or (nil? additional-options) (string? additional-options))
          (contains? valid-separator-styles separator-style)
          (or (nil? name-value-separator?) (and (string? name-value-separator?)
-                                            (= 1 (count name-value-separator?))))
+                                               (= 1 (count name-value-separator?))))
          (or (nil? lowercase-keys?) (boolean? lowercase-keys?))]}
   (if (str/blank? additional-options)
     {}
     (let [entry-sep (separator-style->entry-separator separator-style)
           nv-sep    (or name-value-separator? default-name-value-separator)
           pairs     (str/split additional-options (re-pattern entry-sep))
-          k-fn      (if (or (nil? lowercase-keys?) (true? lowercase-keys?)) str/lower-case identity)
+          k-fn      (if (or (nil? lowercase-keys?) (true? lowercase-keys?)) u/lower-case-en identity)
           kv-fn     (fn [part]
                       (let [[k v] (str/split part (re-pattern (str "\\" nv-sep)))]
                         [(k-fn k) v]))

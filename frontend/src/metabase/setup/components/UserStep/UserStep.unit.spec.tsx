@@ -1,57 +1,74 @@
-import React from "react";
-import { render, screen } from "@testing-library/react";
-import UserStep, { UserStepProps } from "./UserStep";
-import { UserInfo } from "../../types";
+import { mockSettings } from "__support__/settings";
+import { renderWithProviders, screen } from "__support__/ui";
+import type { SetupStep } from "metabase/setup/types";
+import type { UserInfo } from "metabase-types/store";
+import {
+  createMockSetupState,
+  createMockState,
+  createMockUserInfo,
+} from "metabase-types/store/mocks";
 
-const FormMock = () => <div />;
+import { UserStep } from "./UserStep";
 
-jest.mock("metabase/entities/users", () => ({
-  forms: { setup: jest.fn() },
-  Form: FormMock,
-}));
+interface SetupOpts {
+  step?: SetupStep;
+  user?: UserInfo;
+  isHosted?: boolean;
+}
+
+const setup = ({
+  step = "user_info",
+  user,
+  isHosted = false,
+}: SetupOpts = {}) => {
+  const state = createMockState({
+    settings: mockSettings({ "is-hosted?": isHosted }),
+    setup: createMockSetupState({
+      step,
+      user,
+    }),
+  });
+
+  renderWithProviders(<UserStep stepLabel={0} />, { storeInitialState: state });
+};
 
 describe("UserStep", () => {
   it("should render in active state", () => {
-    const props = getProps({
-      isStepActive: true,
-      isStepCompleted: false,
-    });
-
-    render(<UserStep {...props} />);
+    setup({ step: "user_info" });
 
     expect(screen.getByText("What should we call you?")).toBeInTheDocument();
   });
 
-  it("should render in completed state", () => {
-    const props = getProps({
-      user: getUserInfo({ first_name: "Testy" }),
-      isStepActive: false,
-      isStepCompleted: true,
-    });
+  it("should autofocus the first name input field", () => {
+    setup({ step: "user_info" });
 
-    render(<UserStep {...props} />);
+    expect(screen.getByLabelText("First name")).toHaveFocus();
+  });
+
+  it("should autofocus the password input field for hosted instances", () => {
+    const user = createMockUserInfo();
+    setup({ step: "user_info", isHosted: true, user });
+
+    expect(screen.getByLabelText("Create a password")).toHaveFocus();
+  });
+
+  it("should pre-fill the user information if provided", () => {
+    const user = createMockUserInfo();
+    setup({ step: "user_info", user });
+
+    Object.values(user)
+      .filter(v => v.length > 0)
+      .forEach(v => {
+        expect(screen.getByDisplayValue(v)).toBeInTheDocument();
+      });
+  });
+
+  it("should render in completed state", () => {
+    setup({
+      step: "db_connection",
+      user: createMockUserInfo({ first_name: "Testy" }),
+    });
 
     expect(screen.getByText(/Hi, Testy/)).toBeInTheDocument();
   });
-});
-
-const getProps = (opts?: Partial<UserStepProps>): UserStepProps => ({
-  isHosted: false,
-  isStepActive: false,
-  isStepCompleted: false,
-  isSetupCompleted: false,
-  onPasswordChange: jest.fn(),
-  onStepSelect: jest.fn(),
-  onStepSubmit: jest.fn(),
-  ...opts,
-});
-
-const getUserInfo = (opts?: Partial<UserInfo>): UserInfo => ({
-  first_name: "Testy",
-  last_name: "McTestface",
-  email: "testy@metabase.test",
-  site_name: "Epic Team",
-  password: "metasample123",
-  password_confirm: "metasample123",
-  ...opts,
 });

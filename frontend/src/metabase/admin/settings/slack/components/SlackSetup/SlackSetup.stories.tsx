@@ -1,6 +1,6 @@
-import React from "react";
-import { ComponentStory } from "@storybook/react";
-import SlackSetup from "./SlackSetup";
+import type { StoryObj } from "@storybook/react";
+
+import SlackSetup, { type SlackSetupProps } from "./SlackSetup";
 
 export default {
   title: "Admin/Settings/Slack/SlackSetup",
@@ -11,14 +11,15 @@ export default {
   },
 };
 
-export const Default: ComponentStory<typeof SlackSetup> = args => {
-  return <SlackSetup {...args} />;
-};
+export const Default: StoryObj<SlackSetupProps> = {
+  render: args => {
+    return <SlackSetup {...args} />;
+  },
 
-Default.args = {
-  // eslint-disable-next-line react/display-name
-  Form: () => <div />,
-  manifest: "app: token",
-  isBot: false,
-  isValid: true,
+  args: {
+    Form: () => <div />,
+    manifest: "app: token",
+    isBot: false,
+    isValid: true,
+  },
 };

@@ -1,10 +1,14 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { t } from "ttag";
+
 import Button from "metabase/core/components/Button";
+import type { InputProps } from "metabase/core/components/Input";
+import CS from "metabase/css/core/index.css";
+
 import {
   LicenseErrorMessage,
-  LicenseTextInput,
   LicenseInputContainer,
+  LicenseTextInput,
 } from "./LicenseInput.styled";
 
 export interface LicenseInputProps {
@@ -28,7 +32,7 @@ export const LicenseInput = ({
 }: LicenseInputProps) => {
   const [value, setValue] = useState(token ?? "");
 
-  const handleChange = (value: string) => setValue(value);
+  const handleChange: InputProps["onChange"] = e => setValue(e.target.value);
 
   const handleActivate = () => {
     onUpdate(value);
@@ -40,7 +44,8 @@ export const LicenseInput = ({
     <>
       <LicenseInputContainer>
         <LicenseTextInput
-          invalid={invalid}
+          fullWidth
+          error={invalid}
           data-testid="license-input"
           disabled={isDisabled}
           onChange={handleChange}
@@ -53,7 +58,7 @@ export const LicenseInput = ({
         <Button
           disabled={isDisabled}
           data-testid="activate-button"
-          className="px2"
+          className={CS.px2}
           onClick={handleActivate}
         >
           {t`Activate`}

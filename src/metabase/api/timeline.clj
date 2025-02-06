@@ -1,81 +1,112 @@
 (ns metabase.api.timeline
   "/api/timeline endpoints."
-  (:require [compojure.core :refer [DELETE GET POST PUT]]
-            [metabase.api.common :as api]
-            [metabase.models.collection :as collection]
-            [metabase.models.timeline :refer [Timeline]]
-            [metabase.models.timeline-event :as timeline-event :refer [TimelineEvent]]
-            [metabase.util :as u]
-            [metabase.util.schema :as su]
-            [schema.core :as s]
-            [toucan.db :as db]
-            [toucan.hydrate :refer [hydrate]]))
+  (:require
+   [metabase.api.common :as api]
+   [metabase.api.macros :as api.macros]
+   [metabase.models.collection :as collection]
+   [metabase.models.collection.root :as collection.root]
+   [metabase.models.timeline-event :as timeline-event]
+   [metabase.util :as u]
+   [metabase.util.date-2 :as u.date]
+   [metabase.util.malli.registry :as mr]
+   [metabase.util.malli.schema :as ms]
+   [toucan2.core :as t2]))
 
-(def Include
-  "Events Query Parameters Schema"
-  (s/enum "events"))
+(set! *warn-on-reflection* true)
 
-(api/defendpoint POST "/"
+(mr/def ::include
+  [:enum :events])
+
+(mr/def ::Timeline
+  [:map
+   [:id pos-int?]])
+
+(api.macros/defendpoint :post "/" :- ::Timeline
   "Create a new [[Timeline]]."
-  [:as {{:keys [name description icon collection_id archived], :as body} :body}]
-  {name          su/NonBlankString
-   description   (s/maybe s/Str)
-   ;; todo: there are six valid ones. What are they?
-   icon          (s/maybe s/Str)
-   collection_id (s/maybe su/IntGreaterThanZero)
-   archived      (s/maybe s/Bool)}
-  (collection/check-write-perms-for-collection collection_id)
-  (db/insert! Timeline (assoc body :creator_id api/*current-user-id*)))
+  [_route-params
+   _query-params
+   {:keys [icon], collection-id :collection_id, :as body} :- [:map
+                                                              [:name          ms/NonBlankString]
+                                                              [:default       {:optional true} [:maybe :boolean]]
+                                                              [:description   {:optional true} [:maybe :string]]
+                                                              [:icon          {:optional true} [:maybe timeline-event/Icon]]
+                                                              [:collection_id {:optional true} [:maybe ms/PositiveInt]]
+                                                              [:archived      {:optional true} [:maybe :boolean]]]]
+  (collection/check-write-perms-for-collection collection-id)
+  (let [tl (merge
+            body
+            {:creator_id api/*current-user-id*}
+            (when-not icon
+              {:icon timeline-event/default-icon}))]
+    (first (t2/insert-returning-instances! :model/Timeline tl))))
 
-(api/defendpoint GET "/"
-  "Fetch a list of [[Timelines]]. Can include `archived=true` to return archived timelines."
-  [archived]
-  {archived (s/maybe su/BooleanString)}
-  (let [archived? (Boolean/parseBoolean archived)]
-    (db/select Timeline [:where [:= :archived archived?]])))
+(api.macros/defendpoint :get "/" :- [:sequential ::Timeline]
+  "Fetch a list of `Timeline`s. Can include `archived=true` to return archived timelines."
+  [_route-params
+   {:keys [include], archived? :archived} :- [:map
+                                              [:include  {:optional true} ::include]
+                                              [:archived {:default false} ms/BooleanValue]]]
+  (let [timelines (->> (t2/select :model/Timeline
+                                  {:where    [:and
+                                              [:= :archived archived?]
+                                              (collection/visible-collection-filter-clause)]
+                                   :order-by [[:%lower.name :asc]]})
+                       (map collection.root/hydrate-root-collection))]
+    (cond->> (t2/hydrate timelines :creator [:collection :can_write])
+      (= include :events)
+      (map #(timeline-event/include-events-singular % {:events/all? archived?})))))
 
-(api/defendpoint GET "/:id"
-  "Fetch the [[Timeline]] with `id`. Include `include=events` to unarchived events included on the timeline. Add
+(api.macros/defendpoint :get "/:id" :- ::Timeline
+  "Fetch the `Timeline` with `id`. Include `include=events` to unarchived events included on the timeline. Add
   `archived=true` to return all events on the timeline, both archived and unarchived."
-  [id include archived]
-  {include  (s/maybe Include)
-   archived (s/maybe su/BooleanString)}
-  (let [archived? (Boolean/parseBoolean archived)
-        timeline  (api/read-check (Timeline id))]
-    (cond-> (hydrate timeline :creator)
-      (= include "events")
-      (timeline-event/include-events-singular {:events/all? archived?}))))
+  [{:keys [id]}                         :- [:map
+                                            [:id ms/PositiveInt]]
+   {:keys [include archived start end]} :- [:map
+                                            [:include  {:optional true}  ::include]
+                                            [:archived {:default :false} ms/BooleanValue]
+                                            [:start    {:optional true}  ms/TemporalString]
+                                            [:end      {:optional true}  ms/TemporalString]]]
+  (let [archived? archived
+        timeline  (api/read-check (t2/select-one :model/Timeline :id id))]
+    (cond-> (t2/hydrate timeline :creator [:collection :can_write])
+      ;; `collection_id` `nil` means we need to assoc 'root' collection
+      ;; because hydrate `:collection` needs a proper `:id` to work.
+      (nil? (:collection_id timeline))
+      collection.root/hydrate-root-collection
 
-(api/defendpoint PUT "/:id"
+      (= include :events)
+      (timeline-event/include-events-singular {:events/all?  archived?
+                                               :events/start (when start (u.date/parse start))
+                                               :events/end   (when end (u.date/parse end))}))))
+
+(api.macros/defendpoint :put "/:id"
   "Update the [[Timeline]] with `id`. Returns the timeline without events. Archiving a timeline will archive all of the
   events in that timeline."
-  [id :as {{:keys [name description icon collection_id archived] :as timeline-updates} :body}]
-  {name          (s/maybe su/NonBlankString)
-   description   (s/maybe s/Str)
-   ;; todo: there are six valid ones. What are they?
-   icon          (s/maybe s/Str)
-   collection_id (s/maybe su/IntGreaterThanZero)
-   archived      (s/maybe s/Bool)}
-  ;; todo: icon is valid
-  (let [existing (api/write-check Timeline id)
-        current-archived (:archived (db/select-one Timeline :id id))]
+  [{:keys [id]} :- [:map
+                    [:id ms/PositiveInt]]
+   _query-params
+   {:keys [archived] :as timeline-updates} :- [:map
+                                               [:name          {:optional true} [:maybe ms/NonBlankString]]
+                                               [:default       {:optional true} [:maybe :boolean]]
+                                               [:description   {:optional true} [:maybe :string]]
+                                               [:icon          {:optional true} [:maybe timeline-event/Icon]]
+                                               [:collection_id {:optional true} [:maybe ms/PositiveInt]]
+                                               [:archived      {:optional true} [:maybe :boolean]]]]
+  (let [existing (api/write-check :model/Timeline id)
+        current-archived (:archived (t2/select-one :model/Timeline :id id))]
     (collection/check-allowed-to-change-collection existing timeline-updates)
-    (db/update! Timeline id
-      (u/select-keys-when timeline-updates
-        :present #{:description :icon :collection_id :archived}
-        :non-nil #{:name}))
+    (t2/update! :model/Timeline id
+                (u/select-keys-when timeline-updates
+                                    :present #{:description :icon :collection_id :default :archived}
+                                    :non-nil #{:name}))
     (when (and (some? archived) (not= current-archived archived))
-      (db/update-where! TimelineEvent {:timeline_id id} :archived archived))
-    (hydrate (Timeline id) :creator)))
+      (t2/update! :model/TimelineEvent {:timeline_id id} {:archived archived}))
+    (t2/hydrate (t2/select-one :model/Timeline :id id) :creator [:collection :can_write])))
 
-(api/defendpoint DELETE "/:id"
+(api.macros/defendpoint :delete "/:id"
   "Delete a [[Timeline]]. Will cascade delete its events as well."
-  [id]
-  (api/write-check Timeline id)
-  (db/delete! Timeline :id id)
+  [{:keys [id]} :- [:map
+                    [:id ms/PositiveInt]]]
+  (api/write-check :model/Timeline id)
+  (t2/delete! :model/Timeline :id id)
   api/generic-204-no-content)
-
-
-;; todo: icons
-;; todo: how does updated-at work?
-(api/define-routes)

@@ -1,14 +1,25 @@
 import { t } from "ttag";
-import { createEntity, undo } from "metabase/lib/entities";
-import * as Urls from "metabase/lib/urls";
+
+import {
+  subscriptionApi,
+  useGetSubscriptionQuery,
+  useListSubscriptionsQuery,
+} from "metabase/api";
+import { getCollectionType } from "metabase/entities/collections/utils";
 import { color } from "metabase/lib/colors";
-import { PulseApi } from "metabase/services";
+import {
+  createEntity,
+  entityCompatibleQuery,
+  undo,
+} from "metabase/lib/entities";
+import * as Urls from "metabase/lib/urls";
 import { addUndo } from "metabase/redux/undo";
-import { getCollectionType } from "metabase/entities/collections";
-import { canonicalCollectionId } from "metabase/collections/utils";
 
 export const UNSUBSCRIBE = "metabase/entities/pulses/unsubscribe";
 
+/**
+ * @deprecated use "metabase/api" instead
+ */
 const Pulses = createEntity({
   name: "pulses",
   nameOne: "pulse",
@@ -16,6 +27,43 @@ const Pulses = createEntity({
 
   actionTypes: {
     UNSUBSCRIBE,
+  },
+
+  rtk: {
+    getUseGetQuery: () => ({
+      useGetQuery,
+    }),
+    useListQuery: useListSubscriptionsQuery,
+  },
+
+  api: {
+    list: (entityQuery, dispatch) =>
+      entityCompatibleQuery(
+        entityQuery,
+        dispatch,
+        subscriptionApi.endpoints.listSubscriptions,
+      ),
+    get: (entityQuery, options, dispatch) =>
+      entityCompatibleQuery(
+        entityQuery.id,
+        dispatch,
+        subscriptionApi.endpoints.getSubscription,
+      ),
+    create: (entityQuery, dispatch) =>
+      entityCompatibleQuery(
+        entityQuery,
+        dispatch,
+        subscriptionApi.endpoints.createSubscription,
+      ),
+    update: (entityQuery, dispatch) =>
+      entityCompatibleQuery(
+        entityQuery,
+        dispatch,
+        subscriptionApi.endpoints.updateSubscription,
+      ),
+    delete: () => {
+      throw new TypeError("Pulses.api.delete is not supported");
+    },
   },
 
   objectActions: {
@@ -27,39 +75,18 @@ const Pulses = createEntity({
       );
     },
 
-    setChannels: ({ id }, channels, opts) => {
-      return Pulses.actions.update(
-        { id },
-        { channels },
-        undo(opts, t`subscription`, t`updated`),
-      );
-    },
-
-    setCollection: ({ id }, collection, opts) => {
-      return Pulses.actions.update(
-        { id },
-        { collection_id: canonicalCollectionId(collection && collection.id) },
-        undo(opts, t`subscription`, t`moved`),
-      );
-    },
-
-    setPinned: ({ id }, pinned, opts) => {
-      return Pulses.actions.update(
-        { id },
-        {
-          collection_position:
-            typeof pinned === "number" ? pinned : pinned ? 1 : null,
-        },
-        opts,
-      );
-    },
-
-    unsubscribe: ({ id }) => async dispatch => {
-      await PulseApi.unsubscribe({ id });
-      dispatch(addUndo({ message: t`Successfully unsubscribed` }));
-      dispatch({ type: UNSUBSCRIBE, payload: { id } });
-      dispatch({ type: Pulses.actionTypes.INVALIDATE_LISTS_ACTION });
-    },
+    unsubscribe:
+      ({ id }) =>
+      async dispatch => {
+        await entityCompatibleQuery(
+          id,
+          dispatch,
+          subscriptionApi.endpoints.unsubscribe,
+        );
+        dispatch(addUndo({ message: t`Successfully unsubscribed` }));
+        dispatch({ type: UNSUBSCRIBE, payload: { id } });
+        dispatch({ type: Pulses.actionTypes.INVALIDATE_LISTS_ACTION });
+      },
   },
 
   objectSelectors: {
@@ -69,21 +96,14 @@ const Pulses = createEntity({
     getColor: pulse => color("pulse"),
   },
 
-  form: {
-    fields: [
-      { name: "name" },
-      {
-        name: "collection_id",
-        title: "Collection",
-        type: "collection",
-      },
-    ],
-  },
-
   getAnalyticsMetadata([object], { action }, getState) {
     const type = object && getCollectionType(object.collection_id, getState());
     return type && `collection=${type}`;
   },
 });
+
+const useGetQuery = ({ id }, options) => {
+  return useGetSubscriptionQuery(id, options);
+};
 
 export default Pulses;

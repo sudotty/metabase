@@ -1,7 +1,7 @@
 /* eslint-disable react/prop-types */
-import React, { useEffect } from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useEffect } from "react";
 
 import TippyPopover from "./TippyPopover";
 
@@ -38,15 +38,16 @@ function setup({
 describe("Popover", () => {
   it("should be visible on hover of child target element", async () => {
     setup();
-    userEvent.hover(screen.getByText("child target element"));
+    await userEvent.hover(screen.getByText("child target element"));
     expect(await screen.findByText("popover content")).toBeVisible();
   });
 
   it("should be themed as a popover", () => {
     setup({ visible: true });
-    expect(
-      document.querySelector('[data-theme~="popover"'),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("tooltip")).toHaveAttribute(
+      "data-theme",
+      "popover",
+    );
   });
 
   describe("lazy", () => {
@@ -54,7 +55,7 @@ describe("Popover", () => {
       const contentFn = jest.fn();
       setup({ contentFn });
       expect(contentFn).not.toHaveBeenCalled();
-      userEvent.hover(screen.getByText("child target element"));
+      await userEvent.hover(screen.getByText("child target element"));
 
       await screen.findByText("popover content");
       expect(contentFn).toHaveBeenCalled();
@@ -64,7 +65,7 @@ describe("Popover", () => {
       const contentFn = jest.fn();
       setup({ contentFn, lazy: false });
       expect(contentFn).toHaveBeenCalled();
-      expect(screen.queryByText("popover content")).toBeNull();
+      expect(screen.queryByText("popover content")).not.toBeInTheDocument();
     });
   });
 

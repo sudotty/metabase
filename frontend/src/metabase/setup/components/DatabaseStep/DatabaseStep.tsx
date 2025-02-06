@@ -1,65 +1,69 @@
-import React from "react";
-import { t } from "ttag";
-import _ from "underscore";
 import { updateIn } from "icepick";
-import Users from "metabase/entities/users";
-import Databases from "metabase/entities/databases";
-import DriverWarning from "metabase/containers/DriverWarning";
-import ActiveStep from "../ActiveStep";
-import InactiveStep from "../InvactiveStep";
-import SetupSection from "../SetupSection";
+import { t } from "ttag";
+
+import { DatabaseForm } from "metabase/databases/components/DatabaseForm";
+import { useDispatch, useSelector } from "metabase/lib/redux";
+import type { DatabaseData } from "metabase-types/api";
+import type { InviteInfo } from "metabase-types/store";
+
 import {
-  StepActions,
-  StepDescription,
-  StepFormGroup,
-  StepButton,
-} from "./DatabaseStep.styled";
-import { FormProps } from "./types";
-import { DatabaseInfo, InviteInfo, UserInfo } from "../../types";
+  skipDatabase,
+  submitDatabase,
+  submitUserInvite,
+  updateDatabaseEngine,
+} from "../../actions";
+import {
+  getDatabase,
+  getDatabaseEngine,
+  getInvite,
+  getIsEmailConfigured,
+  getUser,
+} from "../../selectors";
+import { useStep } from "../../useStep";
+import { ActiveStep } from "../ActiveStep";
+import { InactiveStep } from "../InactiveStep";
+import { InviteUserForm } from "../InviteUserForm";
+import { SetupSection } from "../SetupSection";
+import type { NumberedStepProps } from "../types";
 
-export interface DatabaseStepProps {
-  user?: UserInfo;
-  database?: DatabaseInfo;
-  engine?: string;
-  invite?: InviteInfo;
-  isEmailConfigured: boolean;
-  isStepActive: boolean;
-  isStepCompleted: boolean;
-  isSetupCompleted: boolean;
-  onEngineChange: (engine: string) => void;
-  onStepSelect: () => void;
-  onDatabaseSubmit: (database: DatabaseInfo) => void;
-  onInviteSubmit: (invite: InviteInfo) => void;
-  onStepCancel: (engine?: string) => void;
-}
+import { StepDescription } from "./DatabaseStep.styled";
 
-const DatabaseStep = ({
-  user,
-  database,
-  engine,
-  invite,
-  isEmailConfigured,
-  isStepActive,
-  isStepCompleted,
-  isSetupCompleted,
-  onEngineChange,
-  onStepSelect,
-  onDatabaseSubmit,
-  onInviteSubmit,
-  onStepCancel,
-}: DatabaseStepProps): JSX.Element => {
-  const handleCancel = () => {
-    onStepCancel(engine);
+export const DatabaseStep = ({ stepLabel }: NumberedStepProps): JSX.Element => {
+  const { isStepActive, isStepCompleted } = useStep("db_connection");
+  const user = useSelector(getUser);
+  const database = useSelector(getDatabase);
+  const engine = useSelector(getDatabaseEngine);
+  const invite = useSelector(getInvite);
+  const isEmailConfigured = useSelector(getIsEmailConfigured);
+
+  const dispatch = useDispatch();
+
+  const handleEngineChange = (engine?: string) => {
+    dispatch(updateDatabaseEngine(engine));
+  };
+
+  const handleDatabaseSubmit = async (database: DatabaseData) => {
+    try {
+      await dispatch(submitDatabase(database)).unwrap();
+    } catch (error) {
+      throw getSubmitError(error);
+    }
+  };
+
+  const handleInviteSubmit = (invite: InviteInfo) => {
+    dispatch(submitUserInvite(invite));
+  };
+
+  const handleStepCancel = () => {
+    dispatch(skipDatabase(engine));
   };
 
   if (!isStepActive) {
     return (
       <InactiveStep
         title={getStepTitle(database, invite, isStepCompleted)}
-        label={3}
+        label={stepLabel}
         isStepCompleted={isStepCompleted}
-        isSetupCompleted={isSetupCompleted}
-        onStepSelect={onStepSelect}
       />
     );
   }
@@ -67,125 +71,36 @@ const DatabaseStep = ({
   return (
     <ActiveStep
       title={getStepTitle(database, invite, isStepCompleted)}
-      label={3}
+      label={stepLabel}
     >
       <StepDescription>
         <div>{t`Are you ready to start exploring your data? Add it below.`}</div>
         <div>{t`Not ready? Skip and play around with our Sample Database.`}</div>
       </StepDescription>
       <DatabaseForm
-        database={database}
-        engine={engine}
-        onSubmit={onDatabaseSubmit}
-        onEngineChange={onEngineChange}
+        initialValues={database}
+        onSubmit={handleDatabaseSubmit}
+        onEngineChange={handleEngineChange}
+        onCancel={handleStepCancel}
       />
-      <StepActions>
-        <StepButton onClick={handleCancel}>
-          {t`I'll add my data later`}
-        </StepButton>
-      </StepActions>
       {isEmailConfigured && (
         <SetupSection
           title={t`Need help connecting to your data?`}
           description={t`Invite a teammate. We’ll make them an admin so they can configure your database. You can always change this later on.`}
         >
-          <InviteForm user={user} invite={invite} onSubmit={onInviteSubmit} />
+          <InviteUserForm
+            user={user}
+            invite={invite}
+            onSubmit={handleInviteSubmit}
+          />
         </SetupSection>
       )}
     </ActiveStep>
   );
 };
 
-interface DatabaseFormProps {
-  database?: DatabaseInfo;
-  engine?: string;
-  onSubmit: (database: DatabaseInfo) => void;
-  onEngineChange: (engine: string) => void;
-}
-
-const DatabaseForm = ({
-  database,
-  engine,
-  onSubmit,
-  onEngineChange,
-}: DatabaseFormProps): JSX.Element => {
-  const handleSubmit = async (database: DatabaseInfo) => {
-    try {
-      await onSubmit(database);
-    } catch (error) {
-      throw getSubmitError(error);
-    }
-  };
-
-  const handleEngineChange = (value?: string) => {
-    value && onEngineChange(value);
-  };
-
-  return (
-    <Databases.Form
-      form={Databases.forms.setup}
-      formName="database"
-      database={database}
-      onSubmit={handleSubmit}
-    >
-      {({
-        Form,
-        FormField,
-        FormFooter,
-        formFields,
-        values,
-        onChangeField,
-      }: FormProps) => (
-        <Form>
-          <FormField name="engine" onChange={handleEngineChange} />
-          <DriverWarning
-            engine={values.engine}
-            hasBorder={true}
-            onChange={engine => onChangeField("engine", engine)}
-          />
-          {_.reject(formFields, { name: "engine" }).map(({ name }) => (
-            <FormField key={name} name={name} />
-          ))}
-          {engine && <FormFooter submitTitle={t`Next`} />}
-        </Form>
-      )}
-    </Databases.Form>
-  );
-};
-
-interface InviteFormProps {
-  user?: UserInfo;
-  invite?: InviteInfo;
-  onSubmit: (invite: InviteInfo) => void;
-}
-
-const InviteForm = ({
-  user,
-  invite,
-  onSubmit,
-}: InviteFormProps): JSX.Element => {
-  return (
-    <Users.Form
-      form={Users.forms.setup_invite(user)}
-      user={invite}
-      onSubmit={onSubmit}
-    >
-      {({ Form, FormField, FormFooter }: FormProps) => (
-        <Form>
-          <StepFormGroup>
-            <FormField name="first_name" />
-            <FormField name="last_name" />
-          </StepFormGroup>
-          <FormField name="email" />
-          <FormFooter submitTitle={t`Send invitation`} />
-        </Form>
-      )}
-    </Users.Form>
-  );
-};
-
 const getStepTitle = (
-  database: DatabaseInfo | undefined,
+  database: DatabaseData | undefined,
   invite: InviteInfo | undefined,
   isStepCompleted: boolean,
 ): string => {
@@ -205,5 +120,3 @@ const getSubmitError = (error: unknown): unknown => {
     details: errors,
   }));
 };
-
-export default DatabaseStep;

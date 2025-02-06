@@ -1,6 +1,10 @@
+---
+title: Using or migrating from an H2 application database
+---
+
 # Using or migrating from an H2 application database
 
-You have installed Metabase, but:
+You've installed Metabase, but:
 
 - You're trying to migrate the application database from H2 to another database and something has gone wrong,
 - You're trying to downgrade rather than upgrade,
@@ -15,11 +19,11 @@ You have installed Metabase, but:
 **Steps to take:**
 
 1. To check what you're using as the app database, go to **Admin Panel**, open the **Troubleshooting** tab, scroll down to "Diagnostic Info", and look for the `application-database` key in the JSON it displays.
-2. See [Migrating from H2][migrate] for instructions on how to migrate to a more robust app database.
+2. See [Migrating from H2](../installation-and-operation/migrating-from-h2.md) for instructions on how to migrate to a more robust app database.
 
 ## Are you trying to migrate the application database from H2 to something else?
 
-**Root cause:** You are trying to [migrate][migrate] the app database from H2 to a production database such as PostgreSQL or MySQL/MariaDB using the `load-from-h2` command, but this has failed because the database filename is incorrect with an error message like:
+**Root cause:** You are trying to [migrate](../installation-and-operation/migrating-from-h2.md) the app database from H2 to a production database such as PostgreSQL or MySQL/MariaDB using the `load-from-h2` command, but this has failed because the database filename is incorrect with an error message like:
 
 ```
 Command failed with exception: Unsupported database file version or invalid file header in file <YOUR FILENAME>
@@ -40,10 +44,10 @@ Command failed with exception: Unsupported database file version or invalid file
     export MB_DB_USER=<username>
     export MB_DB_PASS=<password>
     export MB_DB_HOST=localhost
-    java -jar metabase.jar load-from-h2 /path/to/metabase.db # do not include .mv.db
+    java --add-opens java.base/java.nio=ALL-UNNAMED -jar metabase.jar load-from-h2 /path/to/metabase.db # do not include .mv.db
     ```
 
-If you're using [Metabase Enterprise Edition][enterprise], you can use [serialization][serialization-docs] to snapshot your application database. Serialization is useful when you want to [preload questions and dashboards][serialization-learn] in a new Metabase instance.
+If you're using a [Pro or Enterprise version of Metabase][enterprise], you can use [serialization][serialization-docs] to snapshot your application database. Serialization is useful when you want to [preload questions and dashboards][serialization-learn] in a new Metabase instance.
 
 ## Are you trying to downgrade?
 
@@ -69,7 +73,7 @@ liquibase.exception.DatabaseException: liquibase.exception.LockException: Could 
 1.  Open a shell on the server where Metabase is installed and manually clear the locks by running:
 
     ```
-    java -jar metabase.jar migrate release-locks
+    java --add-opens java.base/java.nio=ALL-UNNAMED -jar metabase.jar migrate release-locks
     ```
 
 2.  Once this command completes, restart your Metabase instance normally (_without_ the `migrate release-locks` flag).
@@ -81,7 +85,7 @@ liquibase.exception.DatabaseException: liquibase.exception.LockException: Could 
 **Steps to take:** Error messages can vary depending on how the app database was corrupted, but in most cases the log message will mention `h2`. A typical command and message are:
 
 ```
-myUser@myIp:~$ java -cp metabase.jar org.h2.tools.RunScript -script whatever.sql -url jdbc:h2:~/metabase.db
+myUser@myIp:~$ java --add-opens java.base/java.nio=ALL-UNNAMED -cp metabase.jar org.h2.tools.RunScript -script whatever.sql -url jdbc:h2:~/metabase.db
 Exception in thread "main" org.h2.jdbc.JdbcSQLException: Row not found when trying to delete from index """"".I37: ( /* key:7864 */ X'5256470012572027c82fc5d2bfb855264ab45f8fec4cf48b0620ccad281d2fe4', 165)" [90112-194]
     at org.h2.message.DbException.getJdbcSQLException(DbException.java:345)
     [etc]
@@ -98,7 +102,7 @@ mv metabase.db.mv.db metabase-old.db.mv.db
 
 touch metabase.db.mv.db
 
-java -cp target/uberjar/metabase.jar org.h2.tools.RunScript -script metabase.db.h2.sql -url jdbc:h2:`pwd`/metabase.db
+java --add-opens java.base/java.nio=ALL-UNNAMED -cp target/uberjar/metabase.jar org.h2.tools.RunScript -script metabase.db.h2.sql -url jdbc:h2:`pwd`/metabase.db
 ```
 
 ## Are you running Metabase with H2 on Windows 10?
@@ -125,8 +129,7 @@ Exception in thread "main" java.lang.AssertionError: Assert failed: Unable to co
 2.  Go to the **Admin Panel** and increase the timeout setting for the app database.
 3.  Move Metabase to a faster server (in particular, a server with faster disks).
 
-[backup]: ../operations-guide/backing-up-metabase-application-data.md
-[enterprise]: /enterprise/
-[migrate]: ../operations-guide/migrating-from-h2.md
-[serialization-docs]: ../enterprise-guide/serialization.md
-[serialization-learn]: /learn/administration/serialization.html
+[backup]: ../installation-and-operation/backing-up-metabase-application-data.md
+[enterprise]: https://www.metabase.com/pricing
+[serialization-docs]: ../installation-and-operation/serialization.md
+[serialization-learn]: https://www.metabase.com/learn/metabase-basics/administration/administration-and-operation/serialization

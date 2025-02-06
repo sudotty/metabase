@@ -1,81 +1,64 @@
-import React from "react";
-import { render, screen } from "@testing-library/react";
-import DatabaseStep, { DatabaseStepProps } from "./DatabaseStep";
-import { DatabaseDetails, DatabaseInfo } from "../../types";
+import { renderWithProviders, screen } from "__support__/ui";
+import type { SetupStep } from "metabase/setup/types";
+import type { DatabaseData } from "metabase-types/api";
+import { createMockDatabaseData } from "metabase-types/api/mocks";
+import {
+  createMockSettingsState,
+  createMockSetupState,
+  createMockState,
+} from "metabase-types/store/mocks";
 
-const ComponentMock = () => <div />;
+import { DatabaseStep } from "./DatabaseStep";
 
-jest.mock("metabase/entities/databases", () => ({
-  forms: { setup: jest.fn() },
-  Form: ComponentMock,
-}));
+interface SetupOpts {
+  step?: SetupStep;
+  database?: DatabaseData;
+  isEmailConfigured?: boolean;
+}
 
-jest.mock("metabase/entities/users", () => ({
-  forms: { setup_invite: jest.fn() },
-  Form: ComponentMock,
-}));
+const setup = ({
+  step = "db_connection",
+  database,
+  isEmailConfigured = false,
+}: SetupOpts = {}) => {
+  const state = createMockState({
+    setup: createMockSetupState({
+      step,
+      database,
+    }),
+    settings: createMockSettingsState({
+      "email-configured?": isEmailConfigured,
+    }),
+  });
 
-jest.mock("metabase/containers/DriverWarning", () => ComponentMock);
+  renderWithProviders(<DatabaseStep stepLabel={0} />, {
+    storeInitialState: state,
+  });
+};
 
 describe("DatabaseStep", () => {
   it("should render in active state", () => {
-    const props = getProps({
-      isStepActive: true,
-      isStepCompleted: false,
-    });
+    setup();
 
-    render(<DatabaseStep {...props} />);
-
-    expect(screen.getByText("Add your data"));
+    expect(screen.getByText("Add your data")).toBeInTheDocument();
   });
 
   it("should render in completed state", () => {
-    const props = getProps({
-      database: getDatabaseInfo({ name: "Test" }),
-      isStepActive: false,
-      isStepCompleted: true,
+    setup({
+      step: "data_usage",
+      database: createMockDatabaseData({ name: "Test" }),
     });
 
-    render(<DatabaseStep {...props} />);
-
-    expect(screen.getByText("Connecting to Test"));
+    expect(screen.getByText("Connecting to Test")).toBeInTheDocument();
   });
 
   it("should render a user invite form", () => {
-    const props = getProps({
-      isStepActive: true,
+    setup({
       isEmailConfigured: true,
     });
 
-    render(<DatabaseStep {...props} />);
-
-    expect(screen.getByText("Need help connecting to your data?"));
+    expect(
+      screen.getByText("Need help connecting to your data?"),
+    ).toBeInTheDocument();
   });
-});
-
-const getProps = (opts?: Partial<DatabaseStepProps>): DatabaseStepProps => ({
-  isEmailConfigured: false,
-  isStepActive: false,
-  isStepCompleted: false,
-  isSetupCompleted: false,
-  onEngineChange: jest.fn(),
-  onStepSelect: jest.fn(),
-  onDatabaseSubmit: jest.fn(),
-  onInviteSubmit: jest.fn(),
-  onStepCancel: jest.fn(),
-  ...opts,
-});
-
-const getDatabaseInfo = (opts?: Partial<DatabaseInfo>): DatabaseInfo => ({
-  name: "Database",
-  engine: "postgres",
-  details: getDatabaseDetails(),
-  ...opts,
-});
-
-const getDatabaseDetails = (
-  opts?: Partial<DatabaseDetails>,
-): DatabaseDetails => ({
-  ssl: false,
-  ...opts,
 });

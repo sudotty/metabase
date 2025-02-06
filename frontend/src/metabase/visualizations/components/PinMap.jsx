@@ -1,19 +1,21 @@
 /* eslint-disable react/prop-types */
-import React, { Component } from "react";
+import cx from "classnames";
+import * as d3 from "d3";
+import L from "leaflet";
+import { Component } from "react";
 import { t } from "ttag";
-import { hasLatitudeAndLongitudeColumns } from "metabase/lib/schema_metadata";
-import { LatitudeLongitudeError } from "metabase/visualizations/lib/errors";
+import _ from "underscore";
 
+import ButtonsS from "metabase/css/components/buttons.module.css";
+import CS from "metabase/css/core/index.css";
+import DashboardS from "metabase/css/dashboard.module.css";
+import { LatitudeLongitudeError } from "metabase/visualizations/lib/errors";
+import { hasLatitudeAndLongitudeColumns } from "metabase-lib/v1/types/utils/isa";
+
+import LeafletGridHeatMap from "./LeafletGridHeatMap";
+import LeafletHeatMap from "./LeafletHeatMap";
 import LeafletMarkerPinMap from "./LeafletMarkerPinMap";
 import LeafletTilePinMap from "./LeafletTilePinMap";
-import LeafletHeatMap from "./LeafletHeatMap";
-import LeafletGridHeatMap from "./LeafletGridHeatMap";
-
-import _ from "underscore";
-import cx from "classnames";
-import d3 from "d3";
-
-import L from "leaflet";
 
 const WORLD_BOUNDS = [
   [-90, -180],
@@ -130,9 +132,15 @@ export default class PinMap extends Component {
     ]);
 
     // only use points with numeric coordinates & metric
-    const points = allPoints.filter(
-      ([lat, lng, metric]) => lat != null && lng != null && metric != null,
-    );
+    const validPoints = allPoints.map(([lat, lng, metric]) => {
+      if (settings["map.type"] === "pin") {
+        return lat != null && lng != null;
+      }
+
+      return lat != null && lng != null && metric != null;
+    });
+    const points = allPoints.filter((_, i) => validPoints[i]);
+    const updatedRows = rows.filter((_, i) => validPoints[i]);
 
     const warnings = [];
     const filteredRows = allPoints.length - points.length;
@@ -166,7 +174,7 @@ export default class PinMap extends Component {
       bounds._northEast.lat += binHeight;
     }
 
-    return { points, bounds, min, max, binWidth, binHeight };
+    return { rows: updatedRows, points, bounds, min, max, binWidth, binHeight };
   }
 
   render() {
@@ -176,21 +184,35 @@ export default class PinMap extends Component {
 
     const Map = MAP_COMPONENTS_BY_TYPE[settings["map.pin_type"]];
 
-    const { points, bounds, min, max, binHeight, binWidth } = this.state;
+    const { rows, points, bounds, min, max, binHeight, binWidth } = this.state;
+
+    const mapProps = { ...this.props };
+    mapProps.series[0].data.rows = rows;
 
     return (
       <div
+        data-element-id="pin-map"
         className={cx(
           className,
-          "PinMap relative hover-parent hover--visibility",
+          DashboardS.PinMap,
+          CS.relative,
+          CS.hoverParent,
+          CS.hoverVisibility,
         )}
         onMouseDownCapture={e => e.stopPropagation() /* prevent dragging */}
       >
         {Map ? (
           <Map
-            {...this.props}
+            {...mapProps}
             ref={map => (this._map = map)}
-            className="absolute top left bottom right z1"
+            className={cx(
+              CS.absolute,
+              CS.top,
+              CS.left,
+              CS.bottom,
+              CS.right,
+              CS.z1,
+            )}
             onMapCenterChange={this.onMapCenterChange}
             onMapZoomChange={this.onMapZoomChange}
             lat={lat}
@@ -205,39 +227,66 @@ export default class PinMap extends Component {
             onFiltering={filtering => this.setState({ filtering })}
           />
         ) : null}
-        <div className="absolute top right m1 z2 flex flex-column hover-child">
+        <div
+          className={cx(
+            CS.absolute,
+            CS.top,
+            CS.right,
+            CS.m1,
+            CS.z2,
+            CS.flex,
+            CS.flexColumn,
+            CS.hoverChild,
+          )}
+        >
           {isEditing || !isDashboard ? (
             <div
-              className={cx("PinMapUpdateButton Button Button--small mb1", {
-                "PinMapUpdateButton--disabled": disableUpdateButton,
-              })}
+              className={cx(
+                "PinMapUpdateButton",
+                ButtonsS.Button,
+                ButtonsS.ButtonSmall,
+                CS.mb1,
+                {
+                  [DashboardS.PinMapUpdateButtonDisabled]: disableUpdateButton,
+                },
+              )}
               onClick={this.updateSettings}
             >
               {t`Save as default view`}
             </div>
           ) : null}
-          {!isDashboard && (
-            <div
-              className={cx("PinMapUpdateButton Button Button--small mb1")}
-              onClick={() => {
-                if (
-                  !this.state.filtering &&
-                  this._map &&
-                  this._map.startFilter
-                ) {
-                  this._map.startFilter();
-                } else if (
-                  this.state.filtering &&
-                  this._map &&
-                  this._map.stopFilter
-                ) {
-                  this._map.stopFilter();
-                }
-              }}
-            >
-              {!this.state.filtering ? t`Draw box to filter` : t`Cancel filter`}
-            </div>
-          )}
+          {!isDashboard &&
+            this._map &&
+            this._map.supportsFilter &&
+            this._map.supportsFilter() && (
+              <div
+                className={cx(
+                  "PinMapUpdateButton",
+                  ButtonsS.Button,
+                  ButtonsS.ButtonSmall,
+                  CS.mb1,
+                )}
+                onClick={() => {
+                  if (
+                    !this.state.filtering &&
+                    this._map &&
+                    this._map.startFilter
+                  ) {
+                    this._map.startFilter();
+                  } else if (
+                    this.state.filtering &&
+                    this._map &&
+                    this._map.stopFilter
+                  ) {
+                    this._map.stopFilter();
+                  }
+                }}
+              >
+                {!this.state.filtering
+                  ? t`Draw box to filter`
+                  : t`Cancel filter`}
+              </div>
+            )}
         </div>
       </div>
     );

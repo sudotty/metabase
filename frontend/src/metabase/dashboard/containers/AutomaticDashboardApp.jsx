@@ -1,41 +1,45 @@
 /* eslint-disable react/prop-types */
-import React from "react";
-import { t } from "ttag";
-import { connect } from "react-redux";
 import cx from "classnames";
-
-import title from "metabase/hoc/Title";
-import withToast from "metabase/hoc/Toast";
-import DashboardData from "metabase/dashboard/hoc/DashboardData";
-import { getValuePopulatedParameters } from "metabase/parameters/utils/parameter-values";
+import { dissoc } from "icepick";
+import { Component } from "react";
+import { t } from "ttag";
+import _ from "underscore";
 
 import ActionButton from "metabase/components/ActionButton";
-import Button from "metabase/core/components/Button";
 import Card from "metabase/components/Card";
-import Icon from "metabase/components/Icon";
-import Filter from "metabase/query_builder/components/Filter";
+import Button from "metabase/core/components/Button";
 import Link from "metabase/core/components/Link";
-import Tooltip from "metabase/components/Tooltip";
-
+import Tooltip from "metabase/core/components/Tooltip";
+import CS from "metabase/css/core/index.css";
+import { DashboardTabs } from "metabase/dashboard/components/DashboardTabs";
+import { DASHBOARD_PARAMETERS_PDF_EXPORT_NODE_ID } from "metabase/dashboard/constants";
 import { Dashboard } from "metabase/dashboard/containers/Dashboard";
-import SyncedParametersList from "metabase/parameters/components/SyncedParametersList/SyncedParametersList";
-
-import { getMetadata } from "metabase/selectors/metadata";
-
+import { DashboardData } from "metabase/dashboard/hoc/DashboardData";
+import { getIsHeaderVisible, getTabs } from "metabase/dashboard/selectors";
+import Collections from "metabase/entities/collections";
 import Dashboards from "metabase/entities/dashboards";
-import * as Urls from "metabase/lib/urls";
-import * as MetabaseAnalytics from "metabase/lib/analytics";
-import * as Q from "metabase/lib/query/query";
-import Dimension from "metabase-lib/lib/Dimension";
+import title from "metabase/hoc/Title";
+import withToast from "metabase/hoc/Toast";
 import { color } from "metabase/lib/colors";
+import { connect } from "metabase/lib/redux";
+import * as Urls from "metabase/lib/urls";
+import { ParametersList } from "metabase/parameters/components/ParametersList";
+import { getMetadata } from "metabase/selectors/metadata";
+import { Icon } from "metabase/ui";
+import { getValuePopulatedParameters } from "metabase-lib/v1/parameters/utils/parameter-values";
 
-import { dissoc } from "icepick";
+import { FixedWidthContainer } from "../components/Dashboard/Dashboard.styled";
+import { useDashboardUrlQuery } from "../hooks/use-dashboard-url-query";
+
 import {
   ItemContent,
   ItemDescription,
+  ItemLink,
   ListRoot,
   SidebarHeader,
   SidebarRoot,
+  SuggestionsSidebarWrapper,
+  XrayIcon,
 } from "./AutomaticDashboardApp.styled";
 
 const getDashboardId = (state, { params: { splat }, location: { hash } }) =>
@@ -44,17 +48,16 @@ const getDashboardId = (state, { params: { splat }, location: { hash } }) =>
 const mapStateToProps = (state, props) => ({
   metadata: getMetadata(state),
   dashboardId: getDashboardId(state, props),
+  isHeaderVisible: getIsHeaderVisible(state),
+  tabs: getTabs(state),
 });
 
 const mapDispatchToProps = {
   saveDashboard: Dashboards.actions.save,
+  invalidateCollections: Collections.actions.invalidateLists,
 };
 
-@connect(mapStateToProps, mapDispatchToProps)
-@DashboardData
-@withToast
-@title(({ dashboard }) => dashboard && dashboard.name)
-class AutomaticDashboardApp extends React.Component {
+class AutomaticDashboardAppInner extends Component {
   state = {
     savedDashboardId: null,
   };
@@ -67,15 +70,20 @@ class AutomaticDashboardApp extends React.Component {
   }
 
   save = async () => {
-    const { dashboard, triggerToast, saveDashboard } = this.props;
+    const { dashboard, triggerToast, saveDashboard, invalidateCollections } =
+      this.props;
     // remove the transient id before trying to save
     const { payload: newDashboard } = await saveDashboard(
       dissoc(dashboard, "id"),
     );
+    invalidateCollections();
     triggerToast(
-      <div className="flex align-center">
+      <div className={cx(CS.flex, CS.alignCenter)}>
         {t`Your dashboard was saved`}
-        <Link className="link text-bold ml1" to={Urls.dashboard(newDashboard)}>
+        <Link
+          className={cx(CS.link, CS.textBold, CS.ml1)}
+          to={Urls.dashboard(newDashboard)}
+        >
           {t`See it`}
         </Link>
       </div>,
@@ -83,7 +91,6 @@ class AutomaticDashboardApp extends React.Component {
     );
 
     this.setState({ savedDashboardId: newDashboard.id });
-    MetabaseAnalytics.trackStructEvent("AutoDashboard", "Save");
   };
 
   UNSAFE_componentWillReceiveProps(nextProps) {
@@ -99,6 +106,7 @@ class AutomaticDashboardApp extends React.Component {
       parameters,
       parameterValues,
       setParameterValue,
+      isHeaderVisible,
     } = this.props;
     const { savedDashboardId } = this.state;
     // pull out "more" related items for displaying as a button at the bottom of the dashboard
@@ -109,81 +117,102 @@ class AutomaticDashboardApp extends React.Component {
 
     return (
       <div
-        className={cx("relative AutomaticDashboard", {
+        className={cx(CS.relative, "AutomaticDashboard", {
           "AutomaticDashboard--withSidebar": hasSidebar,
         })}
       >
+        <AutomaticDashboardQueryParamsSync
+          router={this.props.router}
+          location={this.props.location}
+        />
         <div className="" style={{ marginRight: hasSidebar ? 346 : undefined }}>
-          <div className="bg-white border-bottom py2">
-            <div className="wrapper flex align-center">
-              <Icon name="bolt" className="text-gold mr2" size={24} />
-              <div>
-                <h2 className="text-wrap mr2">
-                  {dashboard && <TransientTitle dashboard={dashboard} />}
-                </h2>
-                {dashboard && dashboard.transient_filters && (
-                  <TransientFilters
-                    filter={dashboard.transient_filters}
-                    metadata={this.props.metadata}
-                  />
-                )}
-              </div>
-              {savedDashboardId != null ? (
-                <Button className="ml-auto" disabled>{t`Saved`}</Button>
-              ) : (
-                <ActionButton
-                  className="ml-auto text-nowrap"
-                  success
-                  borderless
-                  actionFn={this.save}
+          {isHeaderVisible && (
+            <div
+              className={cx(CS.bgWhite, CS.borderBottom)}
+              data-testid="automatic-dashboard-header"
+            >
+              <div className={CS.wrapper}>
+                <FixedWidthContainer
+                  data-testid="fixed-width-dashboard-header"
+                  isFixedWidth={dashboard?.width === "fixed"}
                 >
-                  {t`Save this`}
-                </ActionButton>
-              )}
-            </div>
-          </div>
-
-          <div className="wrapper pb4">
-            {parameters && parameters.length > 0 && (
-              <div className="px1 pt1">
-                <SyncedParametersList
-                  className="mt1"
-                  parameters={getValuePopulatedParameters(
-                    parameters,
-                    parameterValues,
+                  <div className={cx(CS.flex, CS.alignCenter, CS.py2)}>
+                    <XrayIcon name="bolt" size={24} />
+                    <div>
+                      <h2 className={cx(CS.textWrap, CS.mr2)}>
+                        {dashboard && <TransientTitle dashboard={dashboard} />}
+                      </h2>
+                    </div>
+                    {savedDashboardId != null ? (
+                      <Button className={CS.mlAuto} disabled>{t`Saved`}</Button>
+                    ) : (
+                      <ActionButton
+                        className={cx(CS.mlAuto, CS.textNoWrap)}
+                        success
+                        borderless
+                        actionFn={this.save}
+                      >
+                        {t`Save this`}
+                      </ActionButton>
+                    )}
+                  </div>
+                  {this.props.tabs.length > 1 && (
+                    <div className={cx(CS.wrapper, CS.flex, CS.alignCenter)}>
+                      <DashboardTabs dashboardId={dashboard.id} />
+                    </div>
                   )}
-                  setParameterValue={setParameterValue}
-                />
+                </FixedWidthContainer>
+              </div>
+            </div>
+          )}
+
+          <div className={cx(CS.wrapper, CS.pb4)}>
+            {parameters && parameters.length > 0 && (
+              <div className={cx(CS.px1, CS.pt1)}>
+                <FixedWidthContainer
+                  id={DASHBOARD_PARAMETERS_PDF_EXPORT_NODE_ID}
+                  data-testid="fixed-width-filters"
+                  isFixedWidth={dashboard?.width === "fixed"}
+                >
+                  <ParametersList
+                    className={CS.mt1}
+                    parameters={getValuePopulatedParameters({
+                      parameters,
+                      values: parameterValues,
+                    })}
+                    setParameterValue={setParameterValue}
+                  />
+                </FixedWidthContainer>
               </div>
             )}
-            <Dashboard {...this.props} />
+            <Dashboard isXray {...this.props} />
           </div>
           {more && (
-            <div className="flex justify-end px4 pb4">
-              <Link
-                to={more}
-                className="ml2"
-                onClick={() =>
-                  MetabaseAnalytics.trackStructEvent(
-                    "AutoDashboard",
-                    "ClickMore",
-                  )
-                }
-              >
+            <div className={cx(CS.flex, CS.justifyEnd, CS.px4, CS.pb4)}>
+              <Link to={more} className={CS.ml2}>
                 <Button iconRight="chevronright">{t`Show more about this`}</Button>
               </Link>
             </div>
           )}
         </div>
         {hasSidebar && (
-          <div className="Layout-sidebar absolute top right bottom">
+          <SuggestionsSidebarWrapper
+            className={cx(CS.absolute, CS.top, CS.right, CS.bottom)}
+          >
             <SuggestionsSidebar related={related} />
-          </div>
+          </SuggestionsSidebarWrapper>
         )}
       </div>
     );
   }
 }
+
+export const AutomaticDashboardAppConnected = _.compose(
+  connect(mapStateToProps, mapDispatchToProps),
+  DashboardData,
+  withToast,
+  title(({ dashboard }) => dashboard && dashboard.name),
+)(AutomaticDashboardAppInner);
 
 const TransientTitle = ({ dashboard }) =>
   dashboard.transient_name ? (
@@ -191,32 +220,6 @@ const TransientTitle = ({ dashboard }) =>
   ) : dashboard.name ? (
     <span>{dashboard.name}</span>
   ) : null;
-
-const TransientFilters = ({ filter, metadata }) => (
-  <div className="mt1 flex align-center text-medium text-bold">
-    {Q.getFilters({ filter }).map((f, index) => (
-      <TransientFilter key={index} filter={f} metadata={metadata} />
-    ))}
-  </div>
-);
-
-const TransientFilter = ({ filter, metadata }) => (
-  <div className="mr3">
-    <Icon size={12} name={getIconForFilter(filter, metadata)} className="mr1" />
-    <Filter filter={filter} metadata={metadata} />
-  </div>
-);
-
-const getIconForFilter = (filter, metadata) => {
-  const field = Dimension.parseMBQL(filter[1], metadata).field();
-  if (field.isDate()) {
-    return "calendar";
-  } else if (field.isLocation()) {
-    return "location";
-  } else {
-    return "label";
-  }
-};
 
 const RELATED_CONTENT = {
   compare: {
@@ -240,37 +243,33 @@ const RELATED_CONTENT = {
 const SuggestionsList = ({ suggestions, section }) => (
   <ListRoot>
     {Object.keys(suggestions).map((s, i) => (
-      <li key={i} className="my2">
+      <li key={i} className={CS.my2}>
         <SuggestionSectionHeading>
           {RELATED_CONTENT[s].title}
         </SuggestionSectionHeading>
         {suggestions[s].length > 0 &&
           suggestions[s].map((item, itemIndex) => (
-            <Link
-              hover={{ color: color("brand") }}
+            <ItemLink
               key={itemIndex}
               to={item.url}
-              className="block hover-parent hover--visibility"
-              data-metabase-event={`Auto Dashboard;Click Related;${s}`}
-              mb={1}
+              className={cx(CS.hoverParent, CS.hoverVisibility)}
             >
-              <Card p={2} hoverable>
+              <Card className={CS.p2} hoverable>
                 <ItemContent>
                   <Icon
                     name={RELATED_CONTENT[s].icon}
                     color={color("accent4")}
-                    mr={1}
-                    size={22}
+                    className={CS.mr1}
                   />
-                  <h4 className="text-wrap">{item.title}</h4>
-                  <ItemDescription className="hover-child">
+                  <h4 className={CS.textWrap}>{item.title}</h4>
+                  <ItemDescription className={CS.hoverChild}>
                     <Tooltip tooltip={item.description}>
-                      <Icon name="question" color={color("bg-dark")} />
+                      <Icon name="info_outline" color={color("bg-dark")} />
                     </Tooltip>
                   </ItemDescription>
                 </ItemContent>
               </Card>
-            </Link>
+            </ItemLink>
           ))}
       </li>
     ))}
@@ -284,11 +283,12 @@ const SuggestionSectionHeading = ({ children }) => (
       textTransform: "uppercase",
       color: color("text-medium"),
     }}
-    className="mb1"
+    className={CS.mb1}
   >
     {children}
   </h5>
 );
+
 const SuggestionsSidebar = ({ related }) => (
   <SidebarRoot>
     <SidebarHeader>{t`More X-rays`}</SidebarHeader>
@@ -296,4 +296,9 @@ const SuggestionsSidebar = ({ related }) => (
   </SidebarRoot>
 );
 
-export default AutomaticDashboardApp;
+// Workaround until AutomaticDashboardApp is refactored to be a function component
+// (or even better, merged/generalized with DashboardApp)
+const AutomaticDashboardQueryParamsSync = ({ router, location }) => {
+  useDashboardUrlQuery(router, location);
+  return null;
+};

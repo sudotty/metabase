@@ -1,22 +1,26 @@
 (ns metabase.test.data.sql-jdbc.execute
-  (:require [clojure.java.jdbc :as jdbc]
-            [clojure.string :as str]
-            [clojure.tools.logging :as log]
-            [metabase.driver :as driver]
-            [metabase.test.data.interface :as tx]
-            [metabase.test.data.sql-jdbc.spec :as spec])
-  (:import java.sql.SQLException))
+  (:require
+   [clojure.java.jdbc :as jdbc]
+   [clojure.string :as str]
+   [metabase.driver :as driver]
+   [metabase.test.data.interface :as tx]
+   [metabase.util.log :as log])
+  (:import
+   (java.sql SQLException)))
+
+(set! *warn-on-reflection* true)
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
 ;;; |                                                      Impl                                                      |
 ;;; +----------------------------------------------------------------------------------------------------------------+
 
-(defn- jdbc-execute! [db-spec sql]
+(defn- jdbc-execute! [^java.sql.Connection conn sql]
   (log/tracef "[execute %s] %s" driver/*driver* (pr-str sql))
-  (jdbc/execute! db-spec [sql] {:transaction? false, :multi? true}))
+  (jdbc/execute! {:connection conn} [sql] {:transaction? false, :multi? true}))
 
-(defn default-execute-sql! [driver context dbdef sql & {:keys [execute!]
-                                                        :or   {execute! jdbc-execute!}}]
+(defn default-execute-sql!
+  [_driver ^java.sql.Connection conn sql & {:keys [execute!]
+                                            :or   {execute! jdbc-execute!}}]
   (let [sql (some-> sql str/trim)]
     (when (and (seq sql)
                ;; make sure SQL isn't just semicolons
@@ -24,16 +28,16 @@
       ;; Remove excess semicolons, otherwise snippy DBs like Oracle will barf
       (let [sql (str/replace sql #";+" ";")]
         (try
-          (execute! (spec/dbdef->spec driver context dbdef) sql)
+          (execute! conn sql)
           (catch SQLException e
-            (println "Error executing SQL:" sql)
-            (printf "Caught SQLException:\n%s\n"
-                    (with-out-str (jdbc/print-sql-exception-chain e)))
+            (log/errorf "Error executing SQL: %s" sql)
+            (log/errorf "Caught SQLException:\n%s\n"
+                        (with-out-str (jdbc/print-sql-exception-chain e)))
             (throw e))
           (catch Throwable e
-            (println "Error executing SQL:" sql)
-            (printf "Caught Exception: %s %s\n%s\n" (class e) (.getMessage e)
-                    (with-out-str (.printStackTrace e)))
+            (log/errorf "Error executing SQL: %s" sql)
+            (log/errorf "Caught Exception: %s %s\n%s\n" (class e) (.getMessage e)
+                        (with-out-str (.printStackTrace e)))
             (throw e)))))))
 
 (defn sequentially-execute-sql!
@@ -42,22 +46,22 @@
 
   Since there are some cases were you might want to execute compound statements without splitting, an upside-down
   ampersand (`⅋`) is understood as an \"escaped\" semicolon in the resulting SQL statement."
-  [driver context dbdef sql  & {:keys [execute!] :or {execute! default-execute-sql!}}]
+  [driver ^java.sql.Connection conn sql & {:keys [execute!] :or {execute! default-execute-sql!}}]
   (when sql
     (doseq [statement (map str/trim (str/split sql #";+"))]
       (when (seq statement)
-        (execute! driver context dbdef (str/replace statement #"⅋" ";"))))))
-
+        (execute! driver conn (str/replace statement #"⅋" ";"))))))
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
 ;;; |                                                   Interface                                                    |
 ;;; +----------------------------------------------------------------------------------------------------------------+
 
 (defmulti execute-sql!
-  "Execute a string of raw SQL. `context` is either `:server` or `:db`. `sql` is a SQL string."
-  {:arglists '([driver context dbdef sql]), :style/indent 2}
+  "Execute a string of raw SQL."
+  {:arglists '([driver ^java.sql.Connection conn sql])}
   tx/dispatch-on-driver-with-test-extensions
   :hierarchy #'driver/hierarchy)
 
-(defmethod execute-sql! :sql-jdbc/test-extensions [driver context defdef sql]
-  (default-execute-sql! driver context defdef sql))
+(defmethod execute-sql! :sql-jdbc/test-extensions
+  [driver ^java.sql.Connection conn sql]
+  (default-execute-sql! driver conn sql))

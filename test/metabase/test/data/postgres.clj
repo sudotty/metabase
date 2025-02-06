@@ -1,14 +1,21 @@
 (ns metabase.test.data.postgres
   "Postgres driver test extensions."
-  (:require [metabase.test.data.interface :as tx]
-            [metabase.test.data.sql :as sql.tx]
-            [metabase.test.data.sql-jdbc :as sql-jdbc.tx]
-            [metabase.test.data.sql-jdbc.load-data :as load-data]
-            [metabase.test.data.sql.ddl :as ddl]))
+  (:require
+   [clojure.test :refer :all]
+   [medley.core :as m]
+   [metabase.driver.sql.query-processor :as sql.qp]
+   [metabase.test :as mt]
+   [metabase.test.data.dataset-definitions]
+   [metabase.test.data.interface :as tx]
+   [metabase.test.data.sql :as sql.tx]
+   [metabase.test.data.sql-jdbc :as sql-jdbc.tx]
+   [metabase.test.data.sql-jdbc.load-data :as load-data]
+   [metabase.test.data.sql.ddl :as ddl]
+   [metabase.util.honey-sql-2 :as h2x]))
+
+(set! *warn-on-reflection* true)
 
 (sql-jdbc.tx/add-test-extensions! :postgres)
-
-(defmethod tx/has-questionable-timezone-support? :postgres [_] true) ; TODO - What?
 
 (defmethod tx/sorts-nil-first? :postgres [_ _] false)
 
@@ -33,6 +40,7 @@
                              :type/Float          "FLOAT"
                              :type/Integer        "INTEGER"
                              :type/IPAddress      "INET"
+                             :type/JSON           "JSON"
                              :type/Text           "TEXT"
                              :type/Time           "TIME"
                              :type/TimeWithTZ     "TIME WITH TIME ZONE"
@@ -72,13 +80,55 @@
   ;; add an additional statement to the front to kill open connections to the DB before dropping
   (cons
    (kill-connections-to-db-sql database-name)
-   (apply (get-method ddl/drop-db-ddl-statements :sql-jdbc/test-extensions) :postgres dbdef options)))
+   (apply (get-method ddl/drop-db-ddl-statements :sql-jdbc/test-extensions) driver dbdef options)))
 
-(defmethod load-data/load-data! :postgres [& args]
-  (apply load-data/load-data-all-at-once! args))
+(defmethod load-data/chunk-size :postgres
+  [_driver _dbdef _tabledef]
+  ;; load data all at once
+  nil)
+
+(defn- cast-json-columns-xform
+  "[[load-data/row-xform]] for Postgres: for each `:type/JSON` column, parse them with cheshire so they enter as json
+  and not text."
+  [tabledef]
+  (when-let [parse-fns (not-empty
+                        (into {}
+                              (keep (fn [fielddef]
+                                      (when (isa? (:base-type fielddef) :type/JSON)
+                                        [(keyword (:field-name fielddef))
+                                         (fn [json]
+                                           [::sql.qp/compiled (h2x/cast "json" json)])])))
+                              (:field-definitions tabledef)))]
+    (map (fn [row]
+           (reduce
+            (fn [row [field-name f]]
+              (update row field-name f))
+            row
+            parse-fns)))))
+
+(defmethod load-data/row-xform :postgres
+  ;; For each `:type/JSON` column, parse them with cheshire so they enter as json and not text.
+  [_driver _dbdef tabledef]
+  (or (cast-json-columns-xform tabledef)
+      identity))
+
+(deftest ^:parallel postgres-row-xform-test
+  (testing "Make sure the row xform and cast-json-columns-xform above are getting applied as expected"
+    (mt/test-driver :postgres
+      (let [dbdef    (tx/get-dataset-definition metabase.test.data.dataset-definitions/json)
+            tabledef (m/find-first
+                      #(= (:table-name %) "json")
+                      (:table-definitions dbdef))]
+        (is (=? [[{:json_bit (mt/malli=? [:tuple [:= :metabase.driver.sql.query-processor/compiled] :any])}]]
+                (into []
+                      (map (fn [chunk]
+                             (into [] (take 1) chunk)))
+                      (#'load-data/reducible-chunks :postgres dbdef tabledef))))))))
 
 (defmethod sql.tx/standalone-column-comment-sql :postgres [& args]
   (apply sql.tx/standard-standalone-column-comment-sql args))
 
 (defmethod sql.tx/standalone-table-comment-sql :postgres [& args]
   (apply sql.tx/standard-standalone-table-comment-sql args))
+
+(defmethod sql.tx/session-schema :postgres [_driver] "public")

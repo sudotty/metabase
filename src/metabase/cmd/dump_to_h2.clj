@@ -7,17 +7,20 @@
 
   or
 
-    java -jar metabase.jar dump-to-h2
+    java --add-opens java.base/java.nio=ALL-UNNAMED -jar metabase.jar dump-to-h2
 
   Validate with:
 
     clojure -M:run load-from-h2 '\"/path/to/metabase.db\"'"
-  (:require [clojure.tools.logging :as log]
-            [metabase.cmd.copy :as copy]
-            [metabase.cmd.copy.h2 :as copy.h2]
-            [metabase.cmd.rotate-encryption-key :as rotate-encryption]
-            [metabase.db.connection :as mdb.conn]
-            [toucan.db :as db]))
+  (:require
+   [clojure.java.jdbc :as jdbc]
+   [metabase.cmd.copy :as copy]
+   [metabase.cmd.copy.h2 :as copy.h2]
+   [metabase.cmd.rotate-encryption-key :as rotate-encryption]
+   [metabase.db :as mdb]
+   [metabase.util.log :as log]))
+
+(set! *warn-on-reflection* true)
 
 (defn dump-to-h2!
   "Transfer data from existing database specified by connection string to the H2 DB specified by env vars. Intended as a
@@ -36,10 +39,9 @@
      (log/infof "Dumping from configured Metabase db to H2 file %s" h2-filename)
      (when-not keep-existing?
        (copy.h2/delete-existing-h2-database-files! h2-filename))
-     (copy/copy! (mdb.conn/db-type) (mdb.conn/data-source) :h2 h2-data-source)
+     (copy/copy! (mdb/db-type) (mdb/data-source) :h2 h2-data-source)
      (when dump-plaintext?
-       (binding [mdb.conn/*db-type*     :h2
-                 mdb.conn/*data-source* h2-data-source
-                 db/*db-connection*     {:datasource h2-data-source}
-                 db/*quoting-style*     :h2]
-         (rotate-encryption/rotate-encryption-key! nil))))))
+       (mdb/with-application-db (mdb/application-db :h2 h2-data-source)
+         (rotate-encryption/rotate-encryption-key! nil)))
+     ;; Flush h2 to disk
+     (jdbc/execute! {:datasource h2-data-source} "CHECKPOINT SYNC"))))

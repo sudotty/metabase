@@ -1,22 +1,19 @@
-import React from "react";
-import cx from "classnames";
-import Link from "metabase/core/components/Link";
-import { AdminNavLink } from "./AdminNavItem.styled";
+import { AdminNavLink, AdminNavListItem } from "./AdminNavItem.styled";
 
-interface AdminNavItem {
+interface AdminNavItemProps {
   name: string;
   path: string;
   currentPath: string;
 }
 
-export const AdminNavItem = ({ name, path, currentPath }: AdminNavItem) => (
-  <li>
-    <AdminNavLink
-      to={path}
-      data-metabase-event={`NavBar;${name}`}
-      isSelected={currentPath.startsWith(path)}
-    >
+export const AdminNavItem = ({
+  name,
+  path,
+  currentPath,
+}: AdminNavItemProps) => (
+  <AdminNavListItem path={path} currentPath={currentPath}>
+    <AdminNavLink to={path} isSelected={currentPath.startsWith(path)}>
       {name}
     </AdminNavLink>
-  </li>
+  </AdminNavListItem>
 );

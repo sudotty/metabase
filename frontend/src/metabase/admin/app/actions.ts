@@ -1,14 +1,14 @@
-import Settings from "metabase/lib/settings";
-import { createThunkAction } from "metabase/lib/redux";
 import { updateSetting } from "metabase/admin/settings/settings";
+import { createAsyncThunk } from "metabase/lib/redux";
 
-export const DISABLE_NOTICE = "metabase/admin/app/DISABLE_NOTICE";
-export const disableNotice = createThunkAction(
-  DISABLE_NOTICE,
-  () => async (dispatch: any) => {
+import { getCurrentVersion } from "../settings/selectors";
+
+export const disableNotice = createAsyncThunk(
+  "metabase/admin/app/DISABLE_NOTICE",
+  async (_, { getState, dispatch }) => {
     const setting = {
       key: "deprecation-notice-version",
-      value: Settings.currentVersion(),
+      value: getCurrentVersion(getState()),
     };
     await dispatch(updateSetting(setting));
   },

@@ -7,8 +7,11 @@
   implementations.
 
   See PR #16365 for more context."
-  (:require [metabase.models.setting :as setting]
-            [metabase.util.i18n :refer [tru]]))
+  (:require
+   [metabase.models.setting :as setting]
+   [metabase.util.i18n :refer [tru]]))
+
+(set! *warn-on-reflection* true)
 
 (defmulti dispatch-multi-setting
   "Determine the dispatch value for a multi-Setting defined by `define-multi-setting`."
@@ -43,7 +46,7 @@
                                        (get-multi-setting ~setting-key (dispatch-multi-setting ~setting-key)))
                             :setter `(fn [new-value#]
                                        (set-multi-setting ~setting-key (dispatch-multi-setting ~setting-key) new-value#))}
-                       options)]
+                           options)]
     `(do
        (let [dispatch-thunk# ~dispatch-thunk]
          (defmethod dispatch-multi-setting ~setting-key

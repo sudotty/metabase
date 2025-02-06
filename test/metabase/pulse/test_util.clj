@@ -1,26 +1,34 @@
 (ns metabase.pulse.test-util
-  (:require [clojure.walk :as walk]
-            [medley.core :as m]
-            [metabase.integrations.slack :as slack]
-            [metabase.models.pulse :as models.pulse :refer [Pulse]]
-            [metabase.models.pulse-card :refer [PulseCard]]
-            [metabase.pulse :as pulse]
-            [metabase.query-processor-test :as qp.test]
-            [metabase.test :as mt]
-            [metabase.test.data.users :as users]
-            [metabase.util :as u]
-            [toucan.util.test :as tt]))
+  (:require
+   [medley.core :as m]
+   [metabase.channel.core :as channel]
+   [metabase.integrations.slack :as slack]
+   [metabase.notification.payload.execute :as notification.payload.execute]
+   [metabase.notification.test-util :as notification.tu]
+   [metabase.pulse.send :as pulse.send]
+   [metabase.query-processor.test-util :as qp.test-util]
+   [metabase.test :as mt]
+   [metabase.test.data.users :as test.users]
+   [metabase.util :as u]))
 
-(defn send-pulse-created-by-user!
+(set! *warn-on-reflection* true)
+
+(defn send-alert-created-by-user!
   "Create a Pulse with `:creator_id` of `user-kw`, and simulate sending it, executing it and returning the results."
   [user-kw card]
-  (tt/with-temp* [Pulse      [pulse {:creator_id (users/user->id user-kw)}]
-                  PulseCard  [_ {:pulse_id (:id pulse), :card_id (u/the-id card)}]]
-    (with-redefs [pulse/send-notifications!    identity
-                  pulse/results->notifications (fn [_ results]
-                                                 (vec results))]
-      (let [[{:keys [result]}] (pulse/send-pulse! pulse)]
-        (qp.test/rows result)))))
+  (notification.tu/with-notification-testing-setup
+    (mt/with-temp [:model/Pulse     pulse {:creator_id (test.users/user->id user-kw)
+                                           :alert_condition "rows"}
+                   :model/PulseChannel _   {:pulse_id (:id pulse), :channel_type :email}
+                   :model/PulseCard _     {:pulse_id (:id pulse), :card_id (u/the-id card)}]
+      (let [pulse-result      (atom nil)
+            orig-execute-card @#'notification.payload.execute/execute-card]
+        (with-redefs [channel/send!                             (constantly :noop)
+                      notification.payload.execute/execute-card (fn [& args]
+                                                                  (u/prog1 (apply orig-execute-card args)
+                                                                    (reset! pulse-result <>)))]
+          (pulse.send/send-pulse! pulse)
+          (qp.test-util/rows (:result @pulse-result)))))))
 
 (def card-name "Test card")
 
@@ -28,50 +36,41 @@
   "Basic query that will return results for an alert"
   [query-map]
   {:name          card-name
-   :dataset_query {:database (mt/id)
-                   :type     :query
-                   :query    (merge {:source-table (mt/id :checkins)
-                                     :aggregation  [["count"]]}
-                                    query-map)}})
+   :dataset_query query-map})
 
 (defmacro checkins-query-card [query]
-  `(checkins-query-card* (mt/$ids ~'checkins ~query)))
+  `(checkins-query-card* (mt/mbql-query ~'checkins ~(merge {:aggregation [["count"]]} query))))
 
 (defn venues-query-card [aggregation-op]
   {:name          card-name
-   :dataset_query {:database (mt/id)
-                   :type     :query
-                   :query    {:source-table (mt/id :venues)
-                              :aggregation  [[aggregation-op (mt/id :venues :price)]]}}})
+   :dataset_query (mt/mbql-query venues
+                    {:aggregation  [[aggregation-op $price]]})})
 
 (defn rasta-id []
   (mt/user->id :rasta))
 
-(defn realize-lazy-seqs
-  "It's possible when data structures contain lazy sequences that the database will be torn down before the lazy seq
-  is realized, causing the data returned to be nil. This function walks the datastructure, realizing all the lazy
-  sequences it finds"
-  [data]
-  (walk/postwalk identity data))
-
-(defn do-with-site-url
-  [f]
+(defn do-with-site-url!
+  [thunk]
   (mt/with-temporary-setting-values [site-url "https://metabase.com/testmb"]
-    (f)))
+    (thunk)))
 
-(defmacro email-test-setup
+(defmacro email-test-setup!
   "Macro that ensures test-data is present and will use a fake inbox for emails"
   [& body]
   `(mt/with-fake-inbox
-     (do-with-site-url (fn [] ~@body))))
+     (do-with-site-url! (fn [] ~@body))))
 
-(defmacro slack-test-setup
+(defmacro slack-test-setup!
   "Macro that ensures test-data is present and disables sending of all notifications"
   [& body]
-  `(with-redefs [metabase.pulse/send-notifications! realize-lazy-seqs
-                 slack/files-channel                (constantly {:name "metabase_files"
-                                                                 :id   "FOO"})]
-     (do-with-site-url (fn [] ~@body))))
+  `(with-redefs [channel/send!       (constantly :noop)
+                 slack/files-channel (constantly "FOO")]
+     (do-with-site-url! (fn [] ~@body))))
+
+(defmacro with-captured-channel-send-messages!
+  [& body]
+  `(notification.tu/with-captured-channel-send!
+     ~@body))
 
 (def png-attachment
   {:type         :inline
@@ -146,7 +145,7 @@
    [{:name "State",
      :slug "state",
      :id "63e719d0",
-     :default ["CA", "NY"],
+     :default ["CA", "NY", "NJ"],
      :type "string/=",
      :sectionId "location"}
     {:name "Quarter and Year",

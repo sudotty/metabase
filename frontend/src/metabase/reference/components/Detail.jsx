@@ -1,10 +1,13 @@
 /* eslint "react/prop-types": "warn" */
-import React from "react";
-import PropTypes from "prop-types";
-import { Link } from "react-router";
-import S from "./Detail.css";
-import { t } from "ttag";
 import cx from "classnames";
+import PropTypes from "prop-types";
+import { memo } from "react";
+import { Link } from "react-router";
+import { t } from "ttag";
+
+import CS from "metabase/css/core/index.css";
+
+import S from "./Detail.module.css";
 
 const Detail = ({
   name,
@@ -17,15 +20,9 @@ const Detail = ({
   field,
 }) => (
   <div className={cx(S.detail)}>
-    <div className={isEditing ? cx(S.detailBody, "flex-full") : S.detailBody}>
+    <div className={isEditing ? cx(S.detailBody, CS.flexFull) : S.detailBody}>
       <div className={S.detailTitle}>
-        {url ? (
-          <Link to={url} className={S.detailName}>
-            {name}
-          </Link>
-        ) : (
-          <span className={S.detailName}>{name}</span>
-        )}
+        {url ? <Link to={url}>{name}</Link> : <span>{name}</span>}
       </div>
       <div
         className={cx(description ? S.detailSubtitle : S.detailSubtitleLight)}
@@ -33,6 +30,7 @@ const Detail = ({
         {isEditing ? (
           <textarea
             className={S.detailTextarea}
+            name={field.name}
             placeholder={placeholder}
             onChange={field.onChange}
             //FIXME: use initialValues from redux forms instead of default value
@@ -45,7 +43,7 @@ const Detail = ({
           </span>
         )}
         {isEditing && field.error && field.touched && (
-          <span className="text-error">{field.error}</span>
+          <span className={CS.textError}>{field.error}</span>
         )}
       </div>
     </div>
@@ -63,4 +61,4 @@ Detail.propTypes = {
   field: PropTypes.object,
 };
 
-export default React.memo(Detail);
+export default memo(Detail);

@@ -1,15 +1,19 @@
-import { parse } from "metabase/lib/expressions/recursive-parser";
-import { resolve } from "metabase/lib/expressions/resolver";
-import { infer } from "metabase/lib/expressions/typeinferencer";
+import { parse } from "metabase-lib/v1/expressions/recursive-parser";
+import { resolve } from "metabase-lib/v1/expressions/resolver";
+import { infer } from "metabase-lib/v1/expressions/typeinferencer";
 
-describe("metabase/lib/expressions/typeinferencer", () => {
+describe("metabase-lib/v1/expressions/typeinferencer", () => {
   function mockResolve(kind, name) {
     return ["field", name];
   }
   function compileAs(source, startRule) {
     let mbql = null;
     try {
-      mbql = resolve(parse(source), startRule, mockResolve);
+      mbql = resolve({
+        expression: parse(source),
+        type: startRule,
+        fn: mockResolve,
+      });
     } catch (e) {}
     return mbql;
   }
@@ -36,6 +40,8 @@ describe("metabase/lib/expressions/typeinferencer", () => {
       case "Location":
       case "Place":
         return "type/Coordinate";
+      case "CreatedAt":
+        return "type/Datetime";
     }
   }
 
@@ -44,6 +50,8 @@ describe("metabase/lib/expressions/typeinferencer", () => {
   }
 
   it("should infer the type of primitives", () => {
+    expect(type("true")).toEqual("boolean");
+    expect(type("false")).toEqual("boolean");
     expect(type("0")).toEqual("number");
     expect(type("1")).toEqual("number");
     expect(type("3.14159")).toEqual("number");
@@ -84,7 +92,7 @@ describe("metabase/lib/expressions/typeinferencer", () => {
   it("should infer the result of string functions", () => {
     expect(type("Ltrim([Name])")).toEqual("string");
     expect(type("Concat(Upper([LastN]), [FirstN])")).toEqual("string");
-    expect(type("SUBSTRING([Product], 0, 3)")).toEqual("string");
+    expect(type("SUBSTRING([Product], 1, 3)")).toEqual("string");
     expect(type("Length([Category])")).toEqual("number");
     expect(type("Length([Category]) > 0")).toEqual("boolean");
   });
@@ -109,5 +117,45 @@ describe("metabase/lib/expressions/typeinferencer", () => {
     expect(type("COALESCE([FirstName], [LastName])")).toEqual("string");
     expect(type("COALESCE([BirthDate], [MiscDate])")).toEqual("type/Temporal");
     expect(type("COALESCE([Place], [Location])")).toEqual("type/Coordinate");
+  });
+
+  it("should infer the result of OFFSET", () => {
+    expect(type("Offset([Price], -1)")).toEqual("number");
+    expect(type("Offset([FirstName], -1)")).toEqual("string");
+    expect(type("Offset([BirthDate], -1)")).toEqual("type/Temporal");
+    expect(type("Offset([Place], -1)")).toEqual("type/Coordinate");
+    expect(type("Offset(Sum([Price]), -1)")).toEqual("number");
+  });
+
+  it("should infer the result of datetimeAdd, datetimeSubtract", () => {
+    expect(type('datetimeAdd([CreatedAt], 2, "month")')).toEqual("datetime");
+    expect(type('datetimeAdd("2022-01-01", 2, "month")')).toEqual("datetime");
+    expect(type('datetimeSubtract([CreatedAt], 2, "month")')).toEqual(
+      "datetime",
+    );
+    expect(type('datetimeSubtract("2022-01-01", 2, "month")')).toEqual(
+      "datetime",
+    );
+    expect(
+      type(
+        'datetimeSubtract(datetimeAdd("2022-01-01", 2, "month"), 4, "minute")',
+      ),
+    ).toEqual("datetime");
+  });
+
+  it("should infer the result of datetimeExtract functions", () => {
+    const ops = [
+      "year",
+      "month",
+      "quarter",
+      "month",
+      "week",
+      "hour",
+      "minute",
+      "second",
+    ];
+    ops.forEach(op => {
+      expect(type(`${op}([Created At])`)).toEqual("number");
+    });
   });
 });

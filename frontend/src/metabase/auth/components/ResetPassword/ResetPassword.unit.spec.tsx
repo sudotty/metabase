@@ -1,77 +1,70 @@
-import React, { ReactNode } from "react";
-import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import ResetPassword, { ResetPasswordProps } from "./ResetPassword";
+import { Route } from "react-router";
+
+import {
+  setupCurrentUserEndpoint,
+  setupPasswordCheckEndpoint,
+  setupPasswordResetTokenEndpoint,
+  setupPropertiesEndpoints,
+  setupResetPasswordEndpoint,
+} from "__support__/server-mocks";
+import { renderWithProviders, screen, waitFor } from "__support__/ui";
+import { createMockSettings, createMockUser } from "metabase-types/api/mocks";
+
+import { ResetPassword } from "./ResetPassword";
+
+interface SetupOpts {
+  isTokenValid?: boolean;
+}
+
+const setup = ({ isTokenValid = true }: SetupOpts = {}) => {
+  setupPasswordResetTokenEndpoint({ valid: isTokenValid });
+  setupResetPasswordEndpoint();
+  setupPasswordCheckEndpoint();
+  setupCurrentUserEndpoint(createMockUser());
+  setupPropertiesEndpoints(createMockSettings());
+
+  renderWithProviders(
+    <>
+      <Route path="/" component={TestHome} />
+      <Route path="/auth/reset_password/:token" component={ResetPassword} />
+    </>,
+    {
+      withRouter: true,
+      initialRoute: "/auth/reset_password/token",
+    },
+  );
+};
+
+const TestHome = () => <div>Home</div>;
 
 describe("ResetPassword", () => {
   it("should show a form when token validations succeeds", async () => {
-    const props = getProps({
-      onValidatePasswordToken: jest.fn().mockResolvedValue({}),
-    });
-
-    render(<ResetPassword {...props} />);
-
-    const message = await screen.findByText("New password");
-    expect(message).toBeInTheDocument();
+    setup({ isTokenValid: true });
+    expect(await screen.findByText("New password")).toBeInTheDocument();
   });
 
   it("should show an error message when token validation fails", async () => {
-    const props = getProps({
-      onValidatePasswordToken: jest.fn().mockRejectedValue({}),
-    });
-
-    render(<ResetPassword {...props} />);
-
-    const message = await screen.findByText("Whoops, that's an expired link");
-    expect(message).toBeInTheDocument();
+    setup({ isTokenValid: false });
+    expect(
+      await screen.findByText(/that's an expired link/),
+    ).toBeInTheDocument();
   });
 
   it("should show a success message when the form is submitted", async () => {
-    const props = getProps({
-      onResetPassword: jest.fn().mockResolvedValue({}),
-      onValidatePasswordToken: jest.fn().mockResolvedValue({}),
+    setup({ isTokenValid: true });
+    expect(await screen.findByText("New password")).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText("Create a password"), "test");
+    await userEvent.type(
+      screen.getByLabelText("Confirm your password"),
+      "test",
+    );
+    await waitFor(() => {
+      expect(screen.getByText("Save new password")).toBeEnabled();
     });
 
-    render(<ResetPassword {...props} />);
-
-    const button = await screen.findByText("Save new password");
-    userEvent.click(button);
-
-    const message = await screen.findByText("All done!");
-    expect(message).toBeInTheDocument();
+    await userEvent.click(screen.getByText("Save new password"));
+    expect(await screen.findByText("Home")).toBeInTheDocument();
   });
 });
-
-const getProps = (opts?: Partial<ResetPasswordProps>): ResetPasswordProps => {
-  return {
-    token: "token",
-    onResetPassword: jest.fn(),
-    onValidatePassword: jest.fn(),
-    onValidatePasswordToken: jest.fn(),
-    ...opts,
-  };
-};
-
-interface FormMockProps {
-  submitTitle: string;
-  onSubmit: () => void;
-}
-
-const FormMock = ({ submitTitle, onSubmit }: FormMockProps) => {
-  return <button onClick={onSubmit}>{submitTitle}</button>;
-};
-
-jest.mock("metabase/entities/users", () => ({
-  forms: { password_reset: jest.fn() },
-  Form: FormMock,
-}));
-
-interface AuthLayoutMockProps {
-  children?: ReactNode;
-}
-
-const AuthLayoutMock = ({ children }: AuthLayoutMockProps) => {
-  return <div>{children}</div>;
-};
-
-jest.mock("../../containers/AuthLayout", () => AuthLayoutMock);

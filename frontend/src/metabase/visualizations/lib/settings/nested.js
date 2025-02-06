@@ -1,10 +1,9 @@
-/* eslint-disable react/prop-types */
-import _ from "underscore";
 import { t } from "ttag";
-
-import { getComputedSettings, getSettingsWidgets } from "../settings";
+import _ from "underscore";
 
 import chartSettingNestedSettings from "metabase/visualizations/components/settings/ChartSettingNestedSettings";
+
+import { getComputedSettings, getSettingsWidgets } from "../settings";
 
 export function nestedSettings(
   id,
@@ -12,14 +11,15 @@ export function nestedSettings(
     objectName = "object",
     getObjects,
     getObjectKey,
-    getSettingDefintionsForObject,
+    getObjectSettings,
+    getSettingDefinitionsForObject,
     getInheritedSettingsForObject = () => ({}),
     component,
     ...def
   } = {},
 ) {
   function getComputedSettingsForObject(series, object, storedSettings, extra) {
-    const settingsDefs = getSettingDefintionsForObject(series, object);
+    const settingsDefs = getSettingDefinitionsForObject(series, object);
     const inheritedSettings = getInheritedSettingsForObject(object);
     const computedSettings = getComputedSettings(
       settingsDefs,
@@ -43,7 +43,7 @@ export function nestedSettings(
       allComputedSettings[key] = getComputedSettingsForObject(
         series,
         object,
-        allStoredSettings[key] || {},
+        getObjectSettings(allStoredSettings, object) ?? {},
         extra,
       );
     }
@@ -57,7 +57,7 @@ export function nestedSettings(
     onChangeSettings,
     extra,
   ) {
-    const settingsDefs = getSettingDefintionsForObject(series, object);
+    const settingsDefs = getSettingDefinitionsForObject(series, object);
     const computedSettings = getComputedSettingsForObject(
       series,
       object,
@@ -78,6 +78,7 @@ export function nestedSettings(
   // decorate with nested settings HOC
   const widget = chartSettingNestedSettings({
     getObjectKey,
+    getObjectSettings,
     getSettingsWidgetsForObject,
   })(component);
 
@@ -85,7 +86,7 @@ export function nestedSettings(
     [id]: {
       section: t`Display`,
       default: {},
-      getProps: (series, settings) => {
+      getProps: (series, settings, onChange, extra) => {
         const objects = getObjects(series, settings);
         const allComputedSettings = getComputedSettingsForAllObjects(
           series,
@@ -99,6 +100,8 @@ export function nestedSettings(
           objects,
           allComputedSettings,
           extra: { series, settings },
+          ...def.getExtraProps?.(series, settings, onChange, extra),
+          ...extra,
         };
       },
       widget,
@@ -111,7 +114,8 @@ export function nestedSettings(
           const key = getObjectKey(object);
           if (!cache.has(key)) {
             const inheritedSettings = getInheritedSettingsForObject(object);
-            const storedSettings = settings[id][key] || {};
+            const storedSettings =
+              getObjectSettings(settings[id], object) ?? {};
             cache.set(key, {
               ...getComputedSettingsForObject(
                 series,

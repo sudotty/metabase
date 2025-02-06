@@ -1,5 +1,5 @@
-import { t } from "ttag";
 import { push } from "react-router-redux";
+import { t } from "ttag";
 
 const CARD_ID_ROW_IDX = 0;
 
@@ -24,5 +24,5 @@ const ErrorDrill = ({ clicked }) => {
 
 export const ErrorMode = {
   name: "error",
-  drills: () => [ErrorDrill],
+  drills: [ErrorDrill],
 };

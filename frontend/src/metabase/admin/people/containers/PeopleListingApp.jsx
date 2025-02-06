@@ -1,20 +1,22 @@
-import React from "react";
+import cx from "classnames";
 import PropTypes from "prop-types";
 import { t } from "ttag";
 
+import { AdminPaneLayout } from "metabase/components/AdminPaneLayout";
+import CS from "metabase/css/core/index.css";
+import { connect } from "metabase/lib/redux";
 import * as Urls from "metabase/lib/urls";
+import { getUserIsAdmin } from "metabase/selectors/user";
+import { Group, Radio } from "metabase/ui";
 
-import AdminPaneLayout from "metabase/components/AdminPaneLayout";
-import Radio from "metabase/core/components/Radio";
-
-import SearchInput from "../components/SearchInput";
 import PeopleList from "../components/PeopleList";
+import SearchInput from "../components/SearchInput";
 import { USER_STATUS } from "../constants";
 import { usePeopleQuery } from "../hooks/use-people-query";
 
 const PAGE_SIZE = 25;
 
-export default function PeopleListingApp({ children }) {
+function PeopleListingApp({ children, isAdmin }) {
   const {
     query,
     status,
@@ -25,33 +27,38 @@ export default function PeopleListingApp({ children }) {
     handlePreviousPage,
   } = usePeopleQuery(PAGE_SIZE);
 
+  const handleSearchChange = e => {
+    updateSearchInputValue(e.target.value);
+  };
+
   const headingContent = (
-    <div className="mb2 flex align-center">
+    <div className={cx(CS.mb2, CS.flex, CS.alignCenter)}>
       <SearchInput
-        className="text-small mr2"
+        className={cx(CS.textSmall, CS.mr2)}
         type="text"
         placeholder={t`Find someone`}
         value={searchInputValue}
-        onChange={updateSearchInputValue}
-        hasClearButton
+        onChange={handleSearchChange}
+        onResetClick={() => updateSearchInputValue("")}
       />
-      <Radio
-        className="ml2 text-bold"
-        value={status}
-        options={[
-          { name: t`Active`, value: USER_STATUS.active },
-          { name: t`Deactivated`, value: USER_STATUS.deactivated },
-        ]}
-        showButtons
-        onChange={updateStatus}
-      />
+      {isAdmin && (
+        <Radio.Group value={status} onChange={updateStatus}>
+          <Group>
+            <Radio label={t`Active`} value={USER_STATUS.active} />
+            <Radio label={t`Deactivated`} value={USER_STATUS.deactivated} />
+          </Group>
+        </Radio.Group>
+      )}
     </div>
   );
+
+  const buttonText =
+    isAdmin && status === USER_STATUS.active ? t`Invite someone` : null;
 
   return (
     <AdminPaneLayout
       headingContent={headingContent}
-      buttonText={status === USER_STATUS.deactivated ? null : t`Invite someone`}
+      buttonText={buttonText}
       buttonLink={Urls.newUser()}
     >
       <PeopleList
@@ -66,4 +73,9 @@ export default function PeopleListingApp({ children }) {
 
 PeopleListingApp.propTypes = {
   children: PropTypes.node,
+  isAdmin: PropTypes.bool,
 };
+
+export default connect(state => ({
+  isAdmin: getUserIsAdmin(state),
+}))(PeopleListingApp);

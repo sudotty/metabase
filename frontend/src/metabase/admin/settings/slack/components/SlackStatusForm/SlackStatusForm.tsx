@@ -1,27 +1,14 @@
-import React, { useCallback, useMemo } from "react";
-import Form from "metabase/containers/Form";
-import { SlackSettings } from "metabase-types/api";
-import { getSlackForm } from "../../forms";
-import { FormProps } from "./types";
+import type { SlackSettings } from "metabase-types/api";
+
+import SlackForm from "../SlackForm";
 
 export interface SlackStatusFormProps {
   settings: SlackSettings;
 }
 
 const SlackStatusForm = ({ settings }: SlackStatusFormProps): JSX.Element => {
-  const form = useMemo(() => getSlackForm(true), []);
-  const onSubmit = useCallback(() => undefined, []);
-
-  return (
-    <Form form={form} initialValues={settings} onSubmit={onSubmit}>
-      {({ Form, FormField }: FormProps) => (
-        <Form>
-          <FormField name="slack-app-token" />
-          <FormField name="slack-files-channel" />
-        </Form>
-      )}
-    </Form>
-  );
+  return <SlackForm initialValues={settings} isReadOnly />;
 };
 
+// eslint-disable-next-line import/no-default-export -- deprecated usage
 export default SlackStatusForm;

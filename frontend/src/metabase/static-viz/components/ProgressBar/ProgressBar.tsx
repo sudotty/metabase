@@ -1,19 +1,17 @@
-import React from "react";
-import { t } from "ttag";
-import { scaleLinear } from "@visx/scale";
-import { Group } from "@visx/group";
 import { ClipPath } from "@visx/clip-path";
+import { Group } from "@visx/group";
+import { scaleLinear } from "@visx/scale";
+import { t } from "ttag";
+
+import type { ColorGetter } from "metabase/visualizations/types";
+
 import { formatNumber } from "../../lib/numbers";
 import { Text } from "../Text";
-import { Pointer } from "./Pointer";
+
 import { CheckMarkIcon } from "./CheckMarkIcon";
-import {
-  createPalette,
-  getBarText,
-  getColors,
-  calculatePointerLabelShift,
-} from "./utils";
-import { ProgressBarData } from "./types";
+import { Pointer } from "./Pointer";
+import type { ProgressBarData } from "./types";
+import { calculatePointerLabelShift, getBarText, getColors } from "./utils";
 
 const layout = {
   width: 440,
@@ -34,20 +32,21 @@ const layout = {
   fontSize: 13,
 };
 
-interface ProgressBarProps {
+export interface ProgressBarProps {
   data: ProgressBarData;
   settings: {
     color: string;
     format: any;
   };
+  getColor: ColorGetter;
 }
 
 const ProgressBar = ({
   data,
   settings: { color, format },
+  getColor,
 }: ProgressBarProps) => {
-  const palette = createPalette(color);
-  const colors = getColors(data, palette);
+  const colors = getColors(data, color || getColor("accent1"));
   const barWidth = layout.width - layout.margin.left - layout.margin.right;
 
   const xMin = layout.margin.left;
@@ -79,7 +78,11 @@ const ProgressBar = ({
   );
 
   return (
-    <svg width={layout.width} height={layout.height}>
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={layout.width}
+      height={layout.height}
+    >
       <ClipPath id="rounded-bar">
         <rect
           width={barWidth}
@@ -87,7 +90,7 @@ const ProgressBar = ({
           rx={layout.borderRadius}
         />
       </ClipPath>
-      <Group clipPath={`url(#rounded-bar)`} top={layout.margin.top} left={xMin}>
+      <Group clipPath="url(#rounded-bar)" top={layout.margin.top} left={xMin}>
         <rect
           width={barWidth}
           height={layout.barHeight}
@@ -102,18 +105,18 @@ const ProgressBar = ({
           <>
             <CheckMarkIcon
               size={layout.iconSize}
-              color="white"
+              color="#ffffff"
               x={10}
               y={(layout.barHeight - layout.iconSize) / 2}
             />
             <Text
               fontSize={layout.fontSize}
               textAnchor="start"
-              color="white"
+              color="text-white"
               x={layout.iconSize + 16}
               y={layout.barHeight / 2}
               verticalAnchor="middle"
-              fill="white"
+              fill="#ffffff"
             >
               {barText}
             </Text>
@@ -123,7 +126,7 @@ const ProgressBar = ({
       <Group left={pointerX} top={pointerY}>
         <Text
           fontSize={layout.fontSize}
-          textAnchor={"middle"}
+          textAnchor="middle"
           dy="-0.4em"
           dx={valueTextShift}
         >
@@ -152,4 +155,5 @@ const ProgressBar = ({
   );
 };
 
+// eslint-disable-next-line import/no-default-export -- deprecated usage
 export default ProgressBar;

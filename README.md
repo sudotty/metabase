@@ -1,93 +1,103 @@
 # Metabase
 
-Metabase is the easy, open source way for everyone in your company to ask questions and learn from data.
+[Metabase](https://www.metabase.com) is the easy, open-source way for everyone in your company to ask questions and learn from data.
 
-![Metabase Product Screenshot](docs/metabase-product-screenshot.png)
+![Metabase Product Screenshot](docs/images/metabase-product-screenshot.svg)
 
 [![Latest Release](https://img.shields.io/github/release/metabase/metabase.svg?label=latest%20release)](https://github.com/metabase/metabase/releases)
-[![Circle CI](https://circleci.com/gh/metabase/metabase.svg?style=svg&circle-token=3ccf0aa841028af027f2ac9e8df17ce603e90ef9)](https://circleci.com/gh/metabase/metabase)
 [![codecov](https://codecov.io/gh/metabase/metabase/branch/master/graph/badge.svg)](https://codecov.io/gh/metabase/metabase)
+![Docker Pulls](https://img.shields.io/docker/pulls/metabase/metabase)
 
-# Features
+## Get started
 
-- 5 minute [setup](https://metabase.com/docs/latest/setting-up-metabase.html) (We're not kidding)
-- Let anyone on your team [ask questions](https://metabase.com/docs/latest/users-guide/04-asking-questions.html) without knowing SQL
-- Rich beautiful [dashboards](https://metabase.com/docs/latest/users-guide/06-sharing-answers.html) with auto refresh and fullscreen
-- [SQL Mode](https://www.metabase.com/docs/latest/users-guide/writing-sql.html) for analysts and data pros
-- Create canonical [segments and metrics](https://metabase.com/docs/latest/administration-guide/07-segments-and-metrics.html) for your team to use
-- Send data to Slack or email on a schedule with [dashboard subscriptions](https://www.metabase.com/docs/latest/users-guide/dashboard-subscriptions.html)
-- [Humanize data](https://metabase.com/docs/latest/administration-guide/03-metadata-editing.html) for your team by renaming, annotating and hiding fields
-- See changes in your data with [alerts](https://www.metabase.com/docs/latest/users-guide/15-alerts.html)
+The easiest way to get started with Metabase is to sign up for a free trial of [Metabase Cloud](https://store.metabase.com/checkout). You get support, backups, upgrades, an SMTP server, SSL certificate, SoC2 Type 2 security auditing, and more (plus your money goes toward improving Metabase). Check out our quick overview of [cloud vs self-hosting](https://www.metabase.com/docs/latest/cloud/cloud-vs-self-hosting). If you need to, you can always switch to [self-hosting](https://www.metabase.com/docs/latest/installation-and-operation/installing-metabase) Metabase at any time (or vice versa).
 
-For more information check out [metabase.com](https://metabase.com/)
+## Features
+
+- [Set up in five minutes](https://www.metabase.com/docs/latest/setting-up-metabase.html) (we're not kidding).
+- Let anyone on your team [ask questions](https://www.metabase.com/docs/latest/users-guide/04-asking-questions.html) without knowing SQL.
+- Use the [SQL editor](https://www.metabase.com/docs/latest/questions/native-editor/writing-sql) for more complex queries.
+- Build handsome, interactive [dashboards](https://www.metabase.com/docs/latest/users-guide/07-dashboards.html) with filters, auto-refresh, fullscreen, and custom click behavior.
+- Create [models](https://www.metabase.com/learn/metabase-basics/getting-started/models) that clean up, annotate, and/or combine raw tables.
+- Define canonical [segments and metrics](https://www.metabase.com/docs/latest/administration-guide/07-segments-and-metrics.html) for your team to use.
+- Send data to Slack or email on a schedule with [dashboard subscriptions](https://www.metabase.com/docs/latest/users-guide/dashboard-subscriptions).
+- Set up [alerts](https://www.metabase.com/docs/latest/users-guide/15-alerts.html) to have Metabase notify you when your data changes.
+- [Embed charts and dashboards](https://www.metabase.com/docs/latest/administration-guide/13-embedding.html) in your app, or even [your entire Metabase](https://www.metabase.com/docs/latest/enterprise-guide/full-app-embedding.html).
+
+Take a [tour of Metabase](https://www.metabase.com/learn/getting-started/tour-of-metabase).
 
 ## Supported databases
 
-- [Officially supported databases](https://www.metabase.com/docs/latest/administration-guide/01-managing-databases.html#officially-supported-databases).
-- [Community-supported drivers](https://www.metabase.com/docs/latest/developers-guide-drivers.html#how-to-use-a-community-built-driver).
+- [Officially supported databases](./docs/databases/connecting.md#connecting-to-supported-databases)
+- [Partner and Community drivers](./docs/developers-guide/partner-and-community-drivers.md)
 
 ## Installation
 
-Metabase can be run just about anywhere so checkout our [Installation Guides](https://www.metabase.com/docs/latest/operations-guide/installing-metabase.html) for detailed instructions for various deployments. Here's the TLDR:
+Metabase can be run just about anywhere. Check out our [Installation Guides](https://www.metabase.com/docs/latest/operations-guide/installing-metabase).
 
-### Docker
+## Contributing
 
-To run Metabase via Docker, just type
+## Quick Setup: Dev environment
 
-```
-docker run -d -p 3000:3000 --name metabase metabase/metabase
-```
+In order to spin up a development environment, you need to start the front end and the backend as follows:
 
-### JAR file
+### Frontend quick setup
 
-To run Metabase via a JAR file, you will need to have a Java Runtime Environment installed on your system.
-
-We recommend the latest LTS version of JRE from [Eclipse Temurin](https://adoptium.net/) with HotSpot JVM and x64 architecture, but other [Java versions](https://www.metabase.com/docs/latest/operations-guide/java-versions.html) might work too.
-
-Go to the [Metabase download page](https://metabase.com/start/jar.html) and download the latest release. Place the downloaded JAR file into a newly created directory (as it will create some files when it is run), and run it with the following command:
+The following command will install the Javascript dependencies:
 
 ```
-java -jar metabase.jar
+$ yarn install
 ```
 
-Now, open a browser and go to [http://localhost:3000](http://localhost:3000) , and you will be asked a set of questions that will set up a user account, and then you can add a database connection. For this to work you will need to get some information about which database you want to connect to, such as the Host Name and Port that it is running on, the Database Name and the User and Password that you will be using.
+To build and run without watching changes:
 
-Once you have added this connection, you will be taken into the app and you'll be ready to ask your first question.
+```
+$ yarn build
+```
 
-For a more detailed walkthrough, check out our [Getting Started](https://www.metabase.com/docs/latest/getting-started.html) guide.
+To build and run with hot-reload:
 
-# Frequently Asked Questions
+```
+$ yarn build-hot
+```
 
-Some questions come up over and over again. Check here first:
-[FAQ](https://www.metabase.com/docs/latest/faq/start.html)
+### Backend  quick setup
 
-# Security Disclosure
+In order to run the backend, you'll need to build the drivers first, and then start the backend:
+
+```
+$ ./bin/build-drivers.sh
+$ clojure -M:run
+```
+
+For a more detailed setup of a dev environment for Metabase, check out our [Developers Guide](./docs/developers-guide/start.md).
+
+## Internationalization
+
+We want Metabase to be available in as many languages as possible. See which translations are available and help contribute to internationalization using our project over at [POEditor](https://poeditor.com/join/project/ynjQmwSsGh). You can also check out our [policies on translations](https://www.metabase.com/docs/latest/administration-guide/localization.html).
+
+## Extending Metabase
+
+Hit our Query API from Javascript to integrate analytics. Metabase enables your application to:
+
+- Build moderation interfaces.
+- Export subsets of your users to third party marketing automation software.
+- Provide a custom customer lookup application for the people in your company.
+
+Check out our guide, [Working with the Metabase API](https://www.metabase.com/learn/administration/metabase-api).
+
+## Security Disclosure
 
 See [SECURITY.md](./SECURITY.md) for details.
 
-# Contributing
+## License
 
-To get started with a development installation of the Metabase, follow the instructions at our [Developers Guide](https://www.metabase.com/docs/latest/developers-guide.html).
-
-Then take a look at our [Contribution Guide](https://www.metabase.com/docs/latest/contributing.html) for information about our process and where you can fit in!
-
-# Internationalization
-
-We want Metabase to be available in as many languages as possible. See which translations are available and help contribute to internationalization using our project over at [POEditor](https://poeditor.com/join/project/ynjQmwSsGh). You can also check out our [policies on translations](https://www.metabase.com/docs/latest/faq/general/what-languages-can-be-used-with-metabase.html).
-
-# Extending and Deep Integrations
-
-Metabase also allows you to hit our Query API directly from Javascript to integrate the simple analytics we provide with your own application or third party services to do things like:
-
-- Build moderation interfaces
-- Export subsets of your users to third party marketing automation software
-- Provide a specialized customer lookup application for the people in your company
-
-
-# License
-
-This repository contains the source code for both the Open Source edition of Metabase, released under the AGPL, as well as the commercial edition of Metabase Enterprise, released under the Metabase Commercial Software License. 
+This repository contains the source code for both the Open Source edition of Metabase, released under the AGPL, as well as the [commercial editions of Metabase](https://www.metabase.com/pricing), which are released under the Metabase Commercial Software License.
 
 See [LICENSE.txt](./LICENSE.txt) for details.
 
-Unless otherwise noted, all files © 2022 Metabase, Inc.
+Unless otherwise noted, all files © 2025 Metabase, Inc.
+
+## [Metabase Experts](https://www.metabase.com/partners/)
+
+If you’d like more technical resources to set up your data stack with Metabase, connect with a [Metabase Expert](https://www.metabase.com/partners/?utm_source=readme&utm_medium=metabase-expetrs&utm_campaign=readme).

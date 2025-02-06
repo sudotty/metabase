@@ -1,5 +1,6 @@
 (ns metabase.query-processor.middleware.add-timezone-info
-  (:require [metabase.query-processor.timezone :as qp.timezone]))
+  (:require
+   [metabase.query-processor.timezone :as qp.timezone]))
 
 (defn- add-timezone-metadata [metadata]
   (merge
@@ -10,6 +11,6 @@
 
 (defn add-timezone-info
   "Add `:results_timezone` and `:requested_timezone` info to query results."
-  [query rff]
+  [_query rff]
   (fn add-timezone-info-rff* [metadata]
     (rff (add-timezone-metadata metadata))))

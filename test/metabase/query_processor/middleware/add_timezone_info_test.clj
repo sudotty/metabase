@@ -1,16 +1,18 @@
 (ns metabase.query-processor.middleware.add-timezone-info-test
-  (:require [clojure.test :refer :all]
-            [metabase.driver :as driver]
-            [metabase.query-processor.middleware.add-timezone-info :as add-timezone-info]
-            [metabase.test :as mt]))
+  (:require
+   [clojure.test :refer :all]
+   [metabase.driver :as driver]
+   [metabase.query-processor.middleware.add-timezone-info
+    :as add-timezone-info]
+   [metabase.test :as mt]))
 
 (driver/register! ::timezone-driver, :abstract? true)
 
-(defmethod driver/supports? [::timezone-driver :set-timezone] [_ _] true)
+(defmethod driver/database-supports? [::timezone-driver :set-timezone] [_driver _feature _db] true)
 
 (driver/register! ::no-timezone-driver, :abstract? true)
 
-(defmethod driver/supports? [::no-timezone-driver :set-timezone] [_ _] false)
+(defmethod driver/database-supports? [::no-timezone-driver :set-timezone] [_driver _feature _db] false)
 
 (defn- add-timezone-info [metadata]
   ((add-timezone-info/add-timezone-info {} identity) metadata))

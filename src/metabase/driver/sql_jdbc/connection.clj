@@ -1,30 +1,49 @@
 (ns metabase.driver.sql-jdbc.connection
   "Logic for creating and managing connection pools for SQL JDBC drivers. Implementations for connection-related driver
   multimethods for SQL JDBC drivers."
-  (:require [clojure.java.jdbc :as jdbc]
-            [clojure.tools.logging :as log]
-            [metabase.config :as config]
-            [metabase.connection-pool :as connection-pool]
-            [metabase.driver :as driver]
-            [metabase.models.database :refer [Database]]
-            [metabase.query-processor.error-type :as qp.error-type]
-            [metabase.util :as u]
-            [metabase.util.i18n :refer [trs tru]]
-            [metabase.util.ssh :as ssh]
-            [toucan.db :as db])
-  (:import com.mchange.v2.c3p0.DataSources
-           javax.sql.DataSource))
+  (:require
+   [clojure.java.jdbc :as jdbc]
+   [metabase.config :as config]
+   [metabase.connection-pool :as connection-pool]
+   [metabase.db :as mdb]
+   [metabase.driver :as driver]
+   [metabase.driver.util :as driver.u]
+   [metabase.lib.metadata :as lib.metadata]
+   [metabase.lib.metadata.jvm :as lib.metadata.jvm]
+   [metabase.logger :as logger]
+   [metabase.models.interface :as mi]
+   [metabase.models.setting :as setting]
+   [metabase.query-processor.pipeline :as qp.pipeline]
+   [metabase.query-processor.store :as qp.store]
+   [metabase.util :as u]
+   [metabase.util.i18n :refer [tru]]
+   [metabase.util.log :as log]
+   [metabase.util.malli :as mu]
+   [metabase.util.ssh :as ssh]
+   ^{:clj-kondo/ignore [:discouraged-namespace]}
+   [toucan2.core :as t2])
+  (:import
+   (com.mchange.v2.c3p0 DataSources)
+   (javax.sql DataSource)
+   (org.apache.logging.log4j Level)))
+
+(set! *warn-on-reflection* true)
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
 ;;; |                                                   Interface                                                    |
 ;;; +----------------------------------------------------------------------------------------------------------------+
 
 (defmulti connection-details->spec
-  "Given a Database `details-map`, return a JDBC connection spec."
-  {:arglists '([driver details-map])}
-  driver/dispatch-on-initialized-driver
-  :hierarchy #'driver/hierarchy)
+  "Given a Database `details-map`, return an unpooled JDBC connection spec. Driver authors should implement this method,
+  but you probably shouldn't be *USE* this method directly! If you want a pooled connection spec (which you almost
+  certainly do), use [[db->pooled-connection-spec]] instead.
 
+  DO NOT USE THIS METHOD DIRECTLY UNLESS YOU KNOW WHAT YOU ARE DOING! THIS RETURNS AN UNPOOLED CONNECTION SPEC! IF YOU
+  WANT A CONNECTION SPEC FOR RUNNING QUERIES USE [[db->pooled-connection-spec]] INSTEAD WHICH WILL RETURN A *POOLED*
+  CONNECTION SPEC."
+  {:added "0.32.0" :arglists '([driver details-map])}
+  driver/dispatch-on-initialized-driver-safe-keys
+  :hierarchy #'driver/hierarchy)
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
 ;;; |                                           Creating Connection Pools                                            |
@@ -40,21 +59,81 @@
   powering Cards and the sync process, which are less sensitive to overhead than something like the application DB.
 
   Drivers that need to override the default properties below can provide custom implementations of this method."
-  {:arglists '([driver database])}
+  {:added "0.33.4" :arglists '([driver database])}
   driver/dispatch-on-initialized-driver
   :hierarchy #'driver/hierarchy)
 
+(defmulti data-source-name
+  "Name, from connection details, to use to identify a database in the c3p0 `dataSourceName`. This is used for so the
+  DataSource has a useful identifier for debugging purposes.
+
+  The default method uses the first non-nil value of the keys `:db`, `:dbname`, `:sid`, or `:catalog`; implement a new
+  method if your driver does not have any of these keys in its details."
+  {:changelog-test/ignore true, :arglists '([driver details]), :added "0.45.0"}
+  driver/dispatch-on-initialized-driver
+  :hierarchy #'driver/hierarchy)
+
+(defmethod data-source-name :default
+  [_driver details]
+  ((some-fn :db
+            :dbname
+            :sid
+            :service-name
+            :catalog)
+   details))
+
+(setting/defsetting jdbc-data-warehouse-max-connection-pool-size
+  "Maximum size of the c3p0 connection pool."
+  :visibility :internal
+  :type       :integer
+  :default    15
+  :audit      :getter
+  :doc "Change this to a higher value if you notice that regular usage consumes all or close to all connections.
+
+When all connections are in use then Metabase will be slower to return results for queries, since it would have to wait for an available connection before processing the next query in the queue.
+
+For setting the maximum, see [MB_APPLICATION_DB_MAX_CONNECTION_POOL_SIZE](#mb_application_db_max_connection_pool_size).")
+
+(setting/defsetting jdbc-data-warehouse-unreturned-connection-timeout-seconds
+  "Kill connections if they are unreturned after this amount of time. In theory this should not be needed because the QP
+  will kill connections that time out, but in practice it seems that connections disappear into the ether every once
+  in a while; rather than exhaust the connection pool, let's be extra safe. This should be the same as the query
+  timeout in [[metabase.query-processor.context/query-timeout-ms]] by default."
+  :visibility :internal
+  :type       :integer
+  :getter     (fn []
+                (or (setting/get-value-of-type :integer :jdbc-data-warehouse-unreturned-connection-timeout-seconds)
+                    (long (/ qp.pipeline/*query-timeout-ms* 1000))))
+  :setter     :none)
+
+(setting/defsetting jdbc-data-warehouse-debug-unreturned-connection-stack-traces
+  "Tell c3p0 to log a stack trace for any connections killed due to exceeding the timeout specified in
+  [[jdbc-data-warehouse-unreturned-connection-timeout-seconds]].
+
+  Note: You also need to update the com.mchange log level to INFO or higher in the log4j configs in order to see the
+  stack traces in the logs."
+  :visibility :internal
+  :type       :boolean
+  :default    false
+  :export?    false
+  :setter     :none
+  :doc        false) ; This setting is documented in other-env-vars.md.
+
 (defmethod data-warehouse-connection-pool-properties :default
   [driver database]
-  { ;; only fetch one new connection at a time, rather than batching fetches (default = 3 at a time). This is done in
+  {;; only fetch one new connection at a time, rather than batching fetches (default = 3 at a time). This is done in
    ;; interest of minimizing memory consumption
    "acquireIncrement"             1
+   ;; Never retry instead of the default of retrying 30 times (#51176)
+   ;; While a couple queries may fail during a reboot, this should allow quicker recovery and less spinning on outdated
+   ;; credentials
+   ;; However, keep 1 retry for the tests to reduce flakiness.
+   "acquireRetryAttempts"         (if config/is-test? 1 0)
    ;; [From dox] Seconds a Connection can remain pooled but unused before being discarded.
    "maxIdleTime"                  (* 3 60 60) ; 3 hours
    "minPoolSize"                  1
    "initialPoolSize"              1
-   "maxPoolSize"                  (or (config/config-int :mb-jdbc-data-warehouse-max-connection-pool-size)
-                                      15)
+   "maxPoolSize"                  (jdbc-data-warehouse-max-connection-pool-size)
    ;; [From dox] If true, an operation will be performed at every connection checkout to verify that the connection is
    ;; valid. [...] ;; Testing Connections in checkout is the simplest and most reliable form of Connection testing,
    ;; but for better performance, consider verifying connections periodically using `idleConnectionTestPeriod`. [...]
@@ -79,15 +158,42 @@
    ;;
    ;; Kill idle connections above the minPoolSize after 5 minutes.
    "maxIdleTimeExcessConnections" (* 5 60)
+   ;; [From dox] Seconds. If set, if an application checks out but then fails to check-in [i.e. close()] a Connection
+   ;; within the specified period of time, the pool will unceremoniously destroy() the Connection. This permits
+   ;; applications with occasional Connection leaks to survive, rather than eventually exhausting the Connection
+   ;; pool. And that's a shame. Zero means no timeout, applications are expected to close() their own
+   ;; Connections. Obviously, if a non-zero value is set, it should be to a value longer than any Connection should
+   ;; reasonably be checked-out. Otherwise, the pool will occasionally kill Connections in active use, which is bad.
+   ;;
+   ;; This should be the same as the query timeout. This theoretically shouldn't happen since the QP should kill
+   ;; things after a certain timeout but it's better to be safe than sorry -- it seems like in practice some
+   ;; connections disappear into the ether
+   "unreturnedConnectionTimeout"  (jdbc-data-warehouse-unreturned-connection-timeout-seconds)
+   ;; [From dox] If true, and if unreturnedConnectionTimeout is set to a positive value, then the pool will capture
+   ;; the stack trace (via an Exception) of all Connection checkouts, and the stack traces will be printed when
+   ;; unreturned checked-out Connections timeout. This is intended to debug applications with Connection leaks, that
+   ;; is applications that occasionally fail to return Connections, leading to pool growth, and eventually
+   ;; exhaustion (when the pool hits maxPoolSize with all Connections checked-out and lost). This parameter should
+   ;; only be set while debugging, as capturing the stack trace will slow down every Connection check-out.
+   ;;
+   ;; As noted in the C3P0 docs, this does add some overhead to create the Exception at Connection checkout.
+   ;; criterium/quick-bench indicates this is ~600ns of overhead per Exception created on my laptop, which is small
+   ;; compared to the overhead added by testConnectionCheckout, above. The memory usage will depend on the size of the
+   ;; stack trace, but clj-memory-meter reports ~800 bytes for a fresh Exception created at the REPL (which presumably
+   ;; has a smaller-than-average stack).
+   "debugUnreturnedConnectionStackTraces" (u/prog1 (jdbc-data-warehouse-debug-unreturned-connection-stack-traces)
+                                            (when (and <> (not (logger/level-enabled? 'com.mchange Level/INFO)))
+                                              (log/warn "jdbc-data-warehouse-debug-unreturned-connection-stack-traces"
+                                                        "is enabled, but INFO logging is not enabled for the"
+                                                        "com.mchange namespace. You must raise the log level for"
+                                                        "com.mchange to INFO via a custom log4j config in order to"
+                                                        "see stacktraces in the logs.")))
    ;; Set the data source name so that the c3p0 JMX bean has a useful identifier, which incorporates the DB ID, driver,
-   ;; and name; to find a "name" in the details, just look for the first key that is set and could make sense, rather
-   ;; than introducing a new driver level multimethod just for this
-   "dataSourceName"               (format "db-%d-%s-%s" (u/the-id database) (name driver) (->> database
-                                                                                               :details
-                                                                                               ((some-fn :db
-                                                                                                         :dbname
-                                                                                                         :sid
-                                                                                                         :catalog))))})
+   ;; and name from the details
+   "dataSourceName"               (format "db-%d-%s-%s"
+                                          (u/the-id database)
+                                          (name driver)
+                                          (data-source-name driver (:details database)))})
 
 (defn- connection-pool-spec
   "Like [[connection-pool/connection-pool-spec]] but also handles situations when the unpooled spec is a `:datasource`."
@@ -96,21 +202,36 @@
     {:datasource (DataSources/pooledDataSource datasource (connection-pool/map->properties pool-properties))}
     (connection-pool/connection-pool-spec spec pool-properties)))
 
+(defn ^:private default-ssh-tunnel-target-port  [driver]
+  (when-let [port-info (some
+                        #(when (= "port" (:name %)) %)
+                        (driver/connection-properties driver))]
+    (or (:default port-info)
+        (:placeholder port-info))))
+
 (defn- create-pool!
   "Create a new C3P0 `ComboPooledDataSource` for connecting to the given `database`."
   [{:keys [id details], driver :engine, :as database}]
   {:pre [(map? database)]}
-  (log/debug (u/format-color 'cyan (trs "Creating new connection pool for {0} database {1} ..." driver id)))
-  (let [details-with-tunnel (driver/incorporate-ssh-tunnel-details driver details) ;; If the tunnel is disabled this returned unchanged
-        spec                (connection-details->spec driver details-with-tunnel)
+  (log/debug (u/format-color :cyan "Creating new connection pool for %s database %s ..." driver id))
+  (let [details-with-tunnel (driver/incorporate-ssh-tunnel-details  ;; If the tunnel is disabled this returned unchanged
+                             driver
+                             (update details :port #(or % (default-ssh-tunnel-target-port driver))))
+        details-with-auth   (driver.u/fetch-and-incorporate-auth-provider-details
+                             driver
+                             id
+                             details-with-tunnel)
+        spec                (connection-details->spec driver details-with-auth)
         properties          (data-warehouse-connection-pool-properties driver database)]
     (merge
-      (connection-pool-spec spec properties)
-      ;; also capture entries related to ssh tunneling for later use
-      (select-keys spec [:tunnel-enabled :tunnel-session :tunnel-tracker :tunnel-entrance-port :tunnel-entrance-host]))))
+     (connection-pool-spec spec properties)
+     ;; also capture entries related to ssh tunneling for later use
+     (select-keys spec [:tunnel-enabled :tunnel-session :tunnel-tracker :tunnel-entrance-port :tunnel-entrance-host])
+     ;; remember when the password expires
+     (select-keys details-with-auth [:password-expiry-timestamp]))))
 
 (defn- destroy-pool! [database-id pool-spec]
-  (log/debug (u/format-color 'red (trs "Closing old connection pool for database {0} ..." database-id)))
+  (log/debug (u/format-color :red "Closing old connection pool for database %s ..." database-id))
   (connection-pool/destroy-connection-pool! pool-spec)
   (ssh/close-tunnel! pool-spec))
 
@@ -119,22 +240,20 @@
   (atom {}))
 
 (defonce ^:private ^{:doc "A map of DB details hash values, keyed by Database `:id`."}
-  database-id->db-details-hashes
+  database-id->jdbc-spec-hash
   (atom {}))
 
-(defn- db-details-hash
-  "Computes a hash value for the given `database`'s `:details` map, for the purpose of determining if details changed
-  and therefore the existing connection pool needs to be invalidated."
-  [database]
-  {:pre [(or nil? (instance? (type Database) database))]}
-  (if (some? database)
-    (hash (:details database))
-    nil))
+(mu/defn- jdbc-spec-hash
+  "Computes a hash value for the JDBC connection spec based on `database`'s `:details` map, for the purpose of
+  determining if details changed and therefore the existing connection pool needs to be invalidated."
+  [{driver :engine, :keys [details], :as database} :- [:maybe :map]]
+  (when (some? database)
+    (hash (connection-details->spec driver details))))
 
 (defn- set-pool!
   "Atomically update the current connection pool for Database `database` with `database-id`. Use this function instead
   of modifying database-id->connection-pool` directly because it properly closes down old pools in a thread-safe way,
-  ensuring no more than one pool is ever open for a single database. Also modifies the database-id->db-details-hashes
+  ensuring no more than one pool is ever open for a single database. Also modifies the [[database-id->jdbc-spec-hash]]
   map with the hash value of the given DB's details map."
   [database-id pool-spec-or-nil database]
   {:pre [(integer? database-id)]}
@@ -146,7 +265,7 @@
       (when-not (identical? old-pool-spec pool-spec-or-nil)
         (destroy-pool! database-id old-pool-spec))))
   ;; update the db details hash cache with the new hash value
-  (swap! database-id->db-details-hashes assoc database-id (db-details-hash database))
+  (swap! database-id->jdbc-spec-hash assoc database-id (jdbc-spec-hash database))
   nil)
 
 (defn invalidate-pool-for-db!
@@ -154,25 +273,20 @@
   [database]
   (set-pool! (u/the-id database) nil nil))
 
-(defn notify-database-updated
-  "Default implementation of `driver/notify-database-updated` for JDBC SQL drivers. We are being informed that a
-  `database` has been updated, so lets shut down the connection pool (if it exists) under the assumption that the
-  connection details have changed."
-  [database]
-  (invalidate-pool-for-db! database))
-
 (defn- log-ssh-tunnel-reconnect-msg! [db-id]
-  (log/warn (u/format-color 'red (trs "ssh tunnel for database {0} looks closed; marking pool invalid to reopen it"
-                                      db-id)))
+  (log/warn (u/format-color :red "ssh tunnel for database %s looks closed; marking pool invalid to reopen it" db-id))
   nil)
 
-(defn- log-db-details-hash-change-msg! [db-id]
-  (log/warn (u/format-color 'yellow (trs "Hash of database {0} details changed; marking pool invalid to reopen it"
-                                          db-id)))
+(defn- log-jdbc-spec-hash-change-msg! [db-id]
+  (log/warn (u/format-color :yellow "Hash of database %s details changed; marking pool invalid to reopen it" db-id))
+  nil)
+
+(defn- log-password-expiry! [db-id]
+  (log/warn (u/format-color :yellow "Password of database %s expired; marking pool invalid to reopen it" db-id))
   nil)
 
 (defn db->pooled-connection-spec
-  "Return a JDBC connection spec that includes a cp30 `ComboPooledDataSource`. These connection pools are cached so we
+  "Return a JDBC connection spec that includes a c3p0 `ComboPooledDataSource`. These connection pools are cached so we
   don't create multiple ones for the same DB."
   [db-or-id-or-spec]
   (cond
@@ -180,27 +294,41 @@
     (u/id db-or-id-or-spec)
     (let [database-id (u/the-id db-or-id-or-spec)
           ;; we need the Database instance no matter what (in order to compare details hash with cached value)
-          db          (or (and (instance? (type Database) db-or-id-or-spec) db-or-id-or-spec) ; passed in
-                          (db/select-one [Database :id :engine :details] :id database-id)     ; look up by ID
-                          (throw (ex-info (tru "Database {0} does not exist." database-id)
-                                   {:status-code 404
-                                    :type        qp.error-type/invalid-query
-                                    :database-id database-id})))
+          db          (or (when (mi/instance-of? :model/Database db-or-id-or-spec)
+                            (lib.metadata.jvm/instance->metadata db-or-id-or-spec :metadata/database))
+                          (when (= (:lib/type db-or-id-or-spec) :metadata/database)
+                            db-or-id-or-spec)
+                          (qp.store/with-metadata-provider database-id
+                            (lib.metadata/database (qp.store/metadata-provider))))
           get-fn      (fn [db-id log-invalidation?]
-                        (when-let [details (get @database-id->connection-pool db-id)]
+                        (let [details (get @database-id->connection-pool db-id ::not-found)]
                           (cond
+                            ;; for the audit db, we pass the datasource for the app-db. This lets us use fewer db
+                            ;; connections with *application-db* and 1 less connection pool. Note: This data-source is
+                            ;; not in [[database-id->connection-pool]].
+                            (:is-audit db)
+                            {:datasource (mdb/data-source)}
+
+                            (= ::not-found details)
+                            nil
+
                             ;; details hash changed from what is cached; invalid
-                            (let [curr-hash (get @database-id->db-details-hashes db-id)
-                                  new-hash  (db-details-hash db)]
+                            (let [curr-hash (get @database-id->jdbc-spec-hash db-id)
+                                  new-hash  (jdbc-spec-hash db)]
                               (when (and (some? curr-hash) (not= curr-hash new-hash))
                                 ;; the hash didn't match, but it's possible that a stale instance of `DatabaseInstance`
                                 ;; was passed in (ex: from a long-running sync operation); fetch the latest one from
                                 ;; our app DB, and see if it STILL doesn't match
-                                (not= curr-hash (-> (db/select-one [Database :id :engine :details] :id database-id)
-                                                    db-details-hash))))
-                            (if log-invalidation?
-                              (log-db-details-hash-change-msg! db-id)
-                              nil)
+                                (not= curr-hash (-> (t2/select-one [:model/Database :id :engine :details] :id database-id)
+                                                    jdbc-spec-hash))))
+                            (when log-invalidation?
+                              (log-jdbc-spec-hash-change-msg! db-id))
+
+                            (let [{:keys [password-expiry-timestamp]} details]
+                              (and (int? password-expiry-timestamp)
+                                   (<= password-expiry-timestamp (System/currentTimeMillis))))
+                            (when log-invalidation?
+                              (log-password-expiry! db-id))
 
                             (nil? (:tunnel-session details)) ; no tunnel in use; valid
                             details
@@ -209,9 +337,8 @@
                             details
 
                             :else ; tunnel in use, and not open; invalid
-                            (if log-invalidation?
-                              (log-ssh-tunnel-reconnect-msg! db-id)
-                              nil))))]
+                            (when log-invalidation?
+                              (log-ssh-tunnel-reconnect-msg! db-id)))))]
       (or
        ;; we have an existing pool for this database, so use it
        (get-fn database-id true)
@@ -241,22 +368,37 @@
 ;;; |                                             metabase.driver impls                                              |
 ;;; +----------------------------------------------------------------------------------------------------------------+
 
-(defn details->connection-spec-for-testing-connection
-  "Return an appropriate JDBC connection spec to test whether a set of connection details is valid (i.e., implementing
-  `can-connect?`)."
-  [driver details]
-  (let [details-with-tunnel (driver/incorporate-ssh-tunnel-details driver details)]
-    (connection-details->spec driver details-with-tunnel)))
+(defn do-with-connection-spec-for-testing-connection
+  "Impl for [[with-connection-spec-for-testing-connection]]."
+  [driver details f]
+  (let [details (update details :port #(or % (default-ssh-tunnel-target-port driver)))]
+    (ssh/with-ssh-tunnel [details-with-tunnel details]
+      (let [details-with-auth (driver.u/fetch-and-incorporate-auth-provider-details
+                               driver
+                               details-with-tunnel)
+            spec (connection-details->spec driver details-with-auth)]
+        (f spec)))))
+
+(defmacro with-connection-spec-for-testing-connection
+  "Execute `body` with an appropriate [[clojure.java.jdbc]] connection spec based on connection `details`. Handles SSH
+  tunneling as needed and properly cleans up after itself.
+
+    (with-connection-spec-for-testing-connection [jdbc-spec [:my-driver conn-details]]
+      (do-something-with-spec jdbc-spec)"
+  {:added "0.45.0", :style/indent 1}
+  [[jdbc-spec-binding [driver details]] & body]
+  `(do-with-connection-spec-for-testing-connection ~driver ~details (^:once fn* [~jdbc-spec-binding] ~@body)))
 
 (defn can-connect-with-spec?
-  "Can we connect to a JDBC database with `clojure.java.jdbc` `jdbc-spec` and run a simple query?"
+  "Can we connect to a JDBC database with [[clojure.java.jdbc]] `jdbc-spec` and run a simple query?"
   [jdbc-spec]
   (let [[first-row] (jdbc/query jdbc-spec ["SELECT 1"])
         [result]    (vals first-row)]
-    (= 1 result)))
+    (= result 1)))
 
 (defn can-connect?
-  "Default implementation of `driver/can-connect?` for SQL JDBC drivers. Checks whether we can perform a simple `SELECT
-  1` query."
+  "Default implementation of [[driver/can-connect?]] for SQL JDBC drivers. Checks whether we can perform a simple
+  `SELECT 1` query."
   [driver details]
-  (can-connect-with-spec? (details->connection-spec-for-testing-connection driver details)))
+  (with-connection-spec-for-testing-connection [jdbc-spec [driver details]]
+    (can-connect-with-spec? jdbc-spec)))

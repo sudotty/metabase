@@ -1,19 +1,21 @@
 /* eslint-disable react/prop-types */
-import React, { Component } from "react";
+import cx from "classnames";
+import moment from "moment-timezone"; // eslint-disable-line no-restricted-imports -- deprecated usage
 import PropTypes from "prop-types";
+import { Component } from "react";
+import { t } from "ttag";
+
+import UserAvatar from "metabase/components/UserAvatar";
+import CS from "metabase/css/core/index.css";
 
 import RevisionDiff from "./RevisionDiff";
-import { t } from "ttag";
-import UserAvatar from "metabase/components/UserAvatar";
-
-import moment from "moment";
 
 export default class Revision extends Component {
   static propTypes = {
     objectName: PropTypes.string.isRequired,
     revision: PropTypes.object.isRequired,
     currentUser: PropTypes.object.isRequired,
-    tableMetadata: PropTypes.object.isRequired,
+    tableId: PropTypes.number.isRequired,
   };
 
   getAction() {
@@ -31,7 +33,7 @@ export default class Revision extends Component {
           return t`edited the title`;
         case "description":
           return t`edited the description`;
-        case "defintion":
+        case "definition":
           return t`edited the ` + objectName;
       }
     }
@@ -46,12 +48,12 @@ export default class Revision extends Component {
     if (user.id === currentUser.id) {
       return t`You`;
     } else {
-      return user.first_name;
+      return user.common_name;
     }
   }
 
   render() {
-    const { revision, tableMetadata, userColor } = this.props;
+    const { revision, userColor, tableId } = this.props;
 
     let message = revision.message;
     let diffKeys = Object.keys(revision.diff || {});
@@ -63,22 +65,22 @@ export default class Revision extends Component {
     }
 
     return (
-      <li className="flex flex-row">
-        <div className="flex flex-column align-center mr2">
-          <div className="text-white">
-            <UserAvatar user={revision.user} background={userColor} />
+      <li className={cx(CS.flex, CS.flexRow)}>
+        <div className={cx(CS.flex, CS.flexColumn, CS.alignCenter, CS.mr2)}>
+          <div className={CS.textWhite}>
+            <UserAvatar user={revision.user} bg={userColor} />
           </div>
           <div
-            className="flex-full my1 border-left"
+            className={cx(CS.flexFull, CS.my1, CS.borderLeft)}
             style={{ borderWidth: 2 }}
           />
         </div>
-        <div className="flex-full mt1 mb4">
-          <div className="flex mb1 text-medium">
-            <span className="">
+        <div className={cx(CS.flex1, CS.mt1, CS.mb4)}>
+          <div className={cx(CS.flex, CS.mb1, CS.textMedium)}>
+            <span>
               <strong>{this.getName()}</strong> {this.getAction()}
             </span>
-            <span className="flex-align-right h5">
+            <span className={cx(CS.flexAlignRight, CS.h5)}>
               {moment(revision.timestamp).format("MMMM DD, YYYY")}
             </span>
           </div>
@@ -88,7 +90,7 @@ export default class Revision extends Component {
               key={key}
               property={key}
               diff={revision.diff[key]}
-              tableMetadata={tableMetadata}
+              tableId={tableId}
             />
           ))}
         </div>

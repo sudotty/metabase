@@ -1,9 +1,12 @@
 (ns metabase.test.data.druid
-  (:require [clojure.string :as str]
-            [metabase.driver.druid.client :as druid.client]
-            [metabase.test.data.impl :as tx.impl]
-            [metabase.test.data.interface :as tx]
-            [metabase.util :as u]))
+  (:require
+   [clojure.string :as str]
+   [metabase.driver.druid.client :as druid.client]
+   [metabase.test.data.impl :as data.impl]
+   [metabase.test.data.interface :as tx]
+   [metabase.util :as u]))
+
+(set! *warn-on-reflection* true)
 
 (tx/add-test-extensions! :druid)
 
@@ -12,8 +15,8 @@
   ;; this value.
   "http://localhost"
   #_(let [host (tx/db-test-env-var-or-throw :druid :host "localhost")]
-    (cond->> host
-      (not (str/starts-with? host "http")) (str "http://"))))
+      (cond->> host
+        (not (str/starts-with? host "http")) (str "http://"))))
 
 (defn- broker-port []
   (Integer/parseUnsignedInt (tx/db-test-env-var-or-throw :druid :port "8082")))
@@ -38,11 +41,11 @@
 
 (defmethod tx/create-db! :druid
   [_ dbdef & _]
-  (let [{:keys [database-name table-definitions], :as dbdef} (tx/get-dataset-definition dbdef)]
+  (let [{:keys [database-name], :as _dbdef} (tx/get-dataset-definition dbdef)]
     (assert (= database-name "checkins")
-      "Druid tests currently only support the flattened test-data dataset.")
+            "Druid tests currently only support the flattened test-data dataset.")
     (assert (contains? (already-loaded) "checkins")
-      "Expected 'checkins' dataset to be present in Druid datasources. (This should be loaded as part of building Docker image)")
+            "Expected 'checkins' dataset to be present in Druid datasources. (This should be loaded as part of building Docker image)")
     nil))
 
 ;; NO-OP
@@ -52,6 +55,6 @@
 
 ;; no-op -- because the names of the columns actually loaded by Druid differ from ones in the database definition, the
 ;; default impl will fail. TODO -- we should write an implementation that works for Druid
-(defmethod tx.impl/verify-data-loaded-correctly :druid
+(defmethod data.impl/verify-data-loaded-correctly :druid
   [_ _ _]
   nil)

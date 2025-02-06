@@ -8,9 +8,13 @@
   https://docs.oracle.com/javase/8/docs/api/java/time/format/DateTimeFormatterBuilder.html for documenation.
 
   TODO - this is a prime library candidate."
-  (:require [metabase.util.date-2.common :as common])
-  (:import [java.time.format DateTimeFormatter DateTimeFormatterBuilder SignStyle]
-           java.time.temporal.TemporalField))
+  (:require
+   [metabase.util.date-2.common :as u.date.common])
+  (:import
+   (java.time.format DateTimeFormatter DateTimeFormatterBuilder SignStyle)
+   (java.time.temporal TemporalField)))
+
+(set! *warn-on-reflection* true)
 
 (defprotocol ^:private Section
   (^:private apply-section [this builder]))
@@ -88,14 +92,14 @@
   (with-option-section :case-sensitivity :case-insensitive sections))
 
 (def ^:private ^SignStyle sign-style
-  (common/static-instances SignStyle))
+  (u.date.common/static-instances SignStyle))
 
 (defn- temporal-field ^TemporalField [x]
   (let [field (if (keyword? x)
-                (common/temporal-field x)
+                (u.date.common/temporal-field x)
                 x)]
     (assert (instance? TemporalField field)
-      (format "Invalid TemporalField: %s" (pr-str field)))
+            (format "Invalid TemporalField: %s" (pr-str field)))
     field))
 
 (defn value

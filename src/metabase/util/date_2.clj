@@ -2,20 +2,28 @@
   "Replacement for `metabase.util.date` that consistently uses `java.time` instead of a mix of `java.util.Date`,
   `java.sql.*`, and Joda-Time."
   (:refer-clojure :exclude [format range])
-  (:require [clojure.string :as str]
-            [clojure.tools.logging :as log]
-            [java-time :as t]
-            [java-time.core :as t.core]
-            [metabase.util.date-2.common :as common]
-            [metabase.util.date-2.parse :as parse]
-            [metabase.util.i18n :as i18n :refer [tru]]
-            [potemkin.types :as p.types]
-            [schema.core :as s])
-  (:import [java.time DayOfWeek Duration Instant LocalDate LocalDateTime LocalTime OffsetDateTime OffsetTime Period
-            ZonedDateTime]
-           [java.time.format DateTimeFormatter DateTimeFormatterBuilder FormatStyle TextStyle]
-           [java.time.temporal Temporal TemporalAdjuster WeekFields]
-           org.threeten.extra.PeriodDuration))
+  (:require
+   [clojure.string :as str]
+   [java-time.api :as t]
+   [java-time.core :as t.core]
+   [metabase.util.date-2.common :as u.date.common]
+   [metabase.util.date-2.parse :as u.date.parse]
+   [metabase.util.i18n :as i18n :refer [tru]]
+   [metabase.util.log :as log]
+   [metabase.util.malli :as mu]
+   [potemkin.types :as p.types])
+  (:import
+   (java.time DayOfWeek Duration Instant LocalDate LocalDateTime LocalTime OffsetDateTime OffsetTime Period ZonedDateTime)
+   (java.time.format DateTimeFormatter DateTimeFormatterBuilder FormatStyle TextStyle)
+   (java.time.temporal Temporal TemporalAdjuster WeekFields)
+   (org.threeten.extra PeriodDuration)))
+
+(set! *warn-on-reflection* true)
+
+(def ^:private TemporalInstance
+  [:fn
+   {:error/message "Instance of a java.time.temporal.Temporal"}
+   (partial instance? Temporal)])
 
 (defn- add-zone-to-local
   "Converts a temporal type without timezone info to one with zone info (i.e., a `ZonedDateTime`)."
@@ -28,7 +36,7 @@
     ;; not using it to make ranges in MBQL filter clauses anyway
     ;;
     ;; TIMEZONE FIXME - not sure we even want to be adding zone-id info for the timestamps above either
-    #_LocalTime   #_ (t/offset-time t (t/zone-id timezone-id))
+    #_LocalTime   #_(t/offset-time t (t/zone-id timezone-id))
     t))
 
 (defn parse
@@ -36,7 +44,7 @@
   `OffsetDateTime`. With a second arg, literals that do not explicitly specify a timezone are interpreted as being in
   `timezone-id`."
   ([s]
-   (parse/parse s))
+   (u.date.parse/parse s))
 
   ([s default-timezone-id]
    (let [result (parse s)]
@@ -91,6 +99,26 @@
      :else
      (t/format formatter t))))
 
+(defn format-rfc3339
+  "Format temporal value `t`, as an RFC3339 datetime string."
+  [t]
+  (cond
+    (instance? Instant t)
+    (recur (t/zoned-date-time t (t/zone-id "UTC")))
+
+    ;; the rfc3339 format requires a timezone component so convert any local datetime/date to zoned
+    (instance? LocalDateTime t)
+    (recur (t/zoned-date-time t (t/zone-id)))
+
+    (instance? LocalDate t)
+    (recur (t/zoned-date-time t (t/local-time 0) (t/zone-id)))
+
+    (nil? t)
+    nil
+
+    :else
+    (t/format "yyyy-MM-dd'T'HH:mm:ss.SSXXX" t)))
+
 (defn format-sql
   "Format a temporal value `t` as a SQL-style literal string (for most SQL databases). This is the same as ISO-8601 but
   uses a space rather than of a `T` to separate the date and time components."
@@ -142,10 +170,11 @@
                             (some-> t class .getCanonicalName))
                        {:t t}))))))
 
-(def ^:private add-units
+(def add-units
+  "A list of units that can be added to a temporal value."
   #{:millisecond :second :minute :hour :day :week :month :quarter :year})
 
-(s/defn add :- Temporal
+(mu/defn add :- TemporalInstance
   "Return a temporal value relative to temporal value `t` by adding (or subtracting) a number of units. Returned value
   will be of same class as `t`.
 
@@ -155,7 +184,9 @@
   ([unit amount]
    (add (t/zoned-date-time) unit amount))
 
-  ([t :- Temporal, unit :- (apply s/enum add-units), amount :- (s/maybe s/Int)]
+  ([t      :- TemporalInstance
+    unit   :- (into [:enum] add-units)
+    amount :- [:maybe :int]]
    (if (zero? amount)
      t
      (t/plus t (case unit
@@ -169,11 +200,12 @@
                  :quarter     (t/months (* amount 3))
                  :year        (t/years amount))))))
 
-;; TIMEZONE FIXME - we should add `:millisecond-of-second` (or `:fraction-of-second`?) and `:second-of-minute` as
-;; well. Not sure where we'd use these, but we should have them for consistency
+;; TIMEZONE FIXME - we should add `:millisecond-of-second` (or `:fraction-of-second`?) .
+;; Not sure where we'd use these, but we should have them for consistency
 (def extract-units
   "Units which return a (numerical, periodic) component of a date"
-  #{:minute-of-hour
+  #{:second-of-minute
+    :minute-of-hour
     :hour-of-day
     :day-of-week
     :day-of-month
@@ -188,8 +220,12 @@
 (defn- start-of-week []
   (keyword ((requiring-resolve 'metabase.public-settings/start-of-week))))
 
-(def ^:private ^{:arglists '(^java.time.DayOfWeek [k])} day-of-week*
-  (common/static-instances DayOfWeek))
+(let [m (u.date.common/static-instances DayOfWeek)]
+  (defn- day-of-week*
+    ^java.time.DayOfWeek [k]
+    (or (get m k)
+        (throw (ex-info (tru "Invalid day of week: {0}" (pr-str k))
+                        {:k k, :allowed (keys m)})))))
 
 (defn- week-fields
   "Create a new instance of a `WeekFields`, which is used for localized day-of-week, week-of-month, and week-of-year.
@@ -204,7 +240,7 @@
   (^WeekFields [first-day-of-week ^Integer minimum-number-of-days-in-first-week]
    (WeekFields/of (day-of-week* first-day-of-week) minimum-number-of-days-in-first-week)))
 
-(s/defn extract :- Number
+(mu/defn extract :- :int
   "Extract a field such as `:minute-of-hour` from a temporal value `t`.
 
     (extract (t/zoned-date-time \"2019-11-05T15:44-08:00[US/Pacific]\") :day-of-month)
@@ -215,11 +251,14 @@
   ([unit]
    (extract (t/zoned-date-time) unit))
 
-  ([t :- Temporal, unit :- (apply s/enum extract-units)]
+  ([t    :- TemporalInstance
+    unit :- (into [:enum] (conj extract-units :day-of-week-iso))]
    (t/as t (case unit
+             :second-of-minute :second-of-minute
              :minute-of-hour   :minute-of-hour
              :hour-of-day      :hour-of-day
              :day-of-week      (.dayOfWeek (week-fields (start-of-week)))
+             :day-of-week-iso  (.dayOfWeek (week-fields :monday))
              :day-of-month     :day-of-month
              :day-of-year      :day-of-year
              :week-of-year     (.weekOfYear (week-fields (start-of-week)))
@@ -278,17 +317,23 @@
       :hours   t
       :days    t)))
 
-(def truncate-units  "Valid date trucation units"
+;;; See https://github.com/dm3/clojure.java-time/issues/95. We need to update the `java-time/truncate-to` copy of the
+;;; actual underlying method since `extend-protocol` mutates the var
+(alter-var-root #'t/truncate-to (constantly t.core/truncate-to))
+
+(def truncate-units
+  "Valid date trucation units"
   #{:millisecond :second :minute :hour :day :week :month :quarter :year})
 
-(s/defn truncate :- Temporal
+(mu/defn truncate :- TemporalInstance
   "Truncate a temporal value `t` to the beginning of `unit`, e.g. `:hour` or `:day`. Not all truncation units are
   supported on all subclasses of `Temporal` — for example, you can't truncate a `LocalTime` to `:month`, for obvious
   reasons."
   ([unit]
    (truncate (t/zoned-date-time) unit))
 
-  ([t :- Temporal, unit :- (apply s/enum truncate-units)]
+  ([^Temporal t :- TemporalInstance
+    unit        :- (into [:enum] truncate-units)]
    (case unit
      :default     t
      :millisecond (t/truncate-to t :millis)
@@ -296,12 +341,12 @@
      :minute      (t/truncate-to t :minutes)
      :hour        (t/truncate-to t :hours)
      :day         (t/truncate-to t :days)
-     :week        (-> (.with t (adjuster :first-day-of-week))     (t/truncate-to :days))
-     :month       (-> (t/adjust t :first-day-of-month)            (t/truncate-to :days))
-     :quarter     (-> (.with t (adjuster :first-day-of-quarter))  (t/truncate-to :days))
-     :year        (-> (t/adjust t :first-day-of-year)             (t/truncate-to :days)))))
+     :week        (-> (.with t (adjuster :first-day-of-week))    (t/truncate-to :days))
+     :month       (-> (t/adjust t :first-day-of-month)           (t/truncate-to :days))
+     :quarter     (-> (.with t (adjuster :first-day-of-quarter)) (t/truncate-to :days))
+     :year        (-> (t/adjust t :first-day-of-year)            (t/truncate-to :days)))))
 
-(s/defn bucket :- (s/cond-pre Number Temporal)
+(mu/defn bucket :- [:or number? TemporalInstance]
   "Perform a truncation or extraction unit on temporal value `t`. (These two operations are collectively known as
   'date bucketing' in Metabase code and MBQL, e.g. for date/time columns in MBQL `:breakout` (SQL `GROUP BY`)).
 
@@ -312,14 +357,17 @@
   ([unit]
    (bucket (t/zoned-date-time) unit))
 
-  ([t :- Temporal, unit :- (apply s/enum (into extract-units truncate-units))]
+  ([t    :- TemporalInstance
+    unit :- (into [:enum] cat [extract-units truncate-units])]
    (cond
      (= unit :default)     t
      (extract-units unit)  (extract t unit)
      (truncate-units unit) (truncate t unit)
      :else                 (throw (Exception. (tru "Invalid unit: {0}" unit))))))
 
-(s/defn range :- {:start Temporal, :end Temporal}
+(mu/defn range :- [:map
+                   [:start TemporalInstance]
+                   [:end   TemporalInstance]]
   "Get a start (by default, inclusive) and end (by default, exclusive) pair of instants for a `unit` span of time
   containing `t`. e.g.
 
@@ -333,10 +381,12 @@
   ([t unit]
    (range t unit nil))
 
-  ([t :- Temporal, unit :- (apply s/enum add-units), {:keys [start end resolution]
-                                                      :or   {start      :inclusive
-                                                             end        :exclusive
-                                                             resolution :millisecond}}]
+  ([t    :- TemporalInstance
+    unit :- (into [:enum] add-units)
+    {:keys [start end resolution]
+     :or   {start      :inclusive
+            end        :exclusive
+            resolution :millisecond}}]
    (let [t (truncate t unit)]
      {:start (case start
                :inclusive t
@@ -382,6 +432,9 @@
                      :exclusive (add t resolution -1)))}
      :=  (range t unit options))))
 
+;; Moving the type hints to the arg lists makes clj-kondo happy, but breaks eastwood (and maybe causes reflection
+;; warnings) at the call sites.
+#_{:clj-kondo/ignore [:non-arg-vec-return-type-hint]}
 (defn ^PeriodDuration period-duration
   "Return the Duration between two temporal values `x` and `y`."
   {:arglists '([s] [period] [duration] [period duration] [start end])}
@@ -426,11 +479,6 @@
       (compare (.addTo (period-duration d1) t)
                (.addTo (period-duration d2) t)))))
 
-(defn less-than-period-duration?
-  "True if period/duration `d1` is shorter than period/duration `d2`."
-  [d1 d2]
-  (neg? (compare-period-durations d1 d2)))
-
 (defn greater-than-period-duration?
   "True if period/duration `d1` is longer than period/duration `d2`."
   [d1 d2]
@@ -462,32 +510,30 @@
 
 (p.types/defprotocol+ WithTimeZoneSameInstant
   "Protocol for converting a temporal value to an equivalent one in a given timezone."
-  (^{:style/indent 0} with-time-zone-same-instant [t ^java.time.ZoneId zone-id]
+  (^{:style/indent [:form]} with-time-zone-same-instant [t ^java.time.ZoneId zone-id]
     "Convert a temporal value to an equivalent one in a given timezone. For local temporal values, this simply
     converts it to the corresponding offset/zoned type; for offset/zoned types, this applies an appropriate timezone
     shift."))
+
+(def ^:private local-time-0 (t/local-time 0))
 
 (extend-protocol WithTimeZoneSameInstant
   ;; convert to a OffsetTime with no offset (UTC); the OffsetTime method impl will apply the zone shift.
   LocalTime
   (with-time-zone-same-instant [t zone-id]
-    (t/offset-time t (common/standard-offset zone-id)))
+    (t/offset-time t (u.date.common/standard-offset zone-id)))
 
   OffsetTime
   (with-time-zone-same-instant [t ^java.time.ZoneId zone-id]
-    (t/with-offset-same-instant t (common/standard-offset zone-id)))
+    (t/with-offset-same-instant t (u.date.common/standard-offset zone-id)))
 
   LocalDate
   (with-time-zone-same-instant [t zone-id]
-    (t/offset-date-time t (t/local-time 0) zone-id))
-
-  LocalDate
-  (with-time-zone-same-instant [t zone-id]
-    (t/offset-date-time t (t/local-time 0) zone-id))
+    (with-time-zone-same-instant (LocalDateTime/of t local-time-0) zone-id))
 
   LocalDateTime
-  (with-time-zone-same-instant [t zone-id]
-    (t/offset-date-time t zone-id))
+  (with-time-zone-same-instant [t ^java.time.ZoneId zone-id]
+    (OffsetDateTime/of t (.getOffset (.getRules zone-id) t)))
 
   ;; instants are always normalized to UTC, so don't make any changes here. If you want to format in a different zone,
   ;; convert to an OffsetDateTime or ZonedDateTime first.
@@ -508,7 +554,6 @@
   ZonedDateTime
   (with-time-zone-same-instant [t zone-id]
     (t/with-zone-same-instant t zone-id)))
-
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
 ;;; |                                                      Etc                                                       |
@@ -545,3 +590,24 @@
 (defmethod print-method Duration
   [d writer]
   (print-method (list 't/duration (str d)) writer))
+
+(defn temporal-str->iso8601-str
+  "Convert temporal string to iso8601 datetime without millis.
+
+  We store datetime values without millis in sqlite. That's not the case for other dbs. Also, some columns are stored
+  as date in sqlite, while other dbs use datetime types. This function makes it easy to share expected results between
+  sqlite and other dbs.
+
+  Use of this function for anything else is highly discouraged."
+  [tstr]
+  (when tstr
+    (let [t (parse tstr)
+          inst (cond (instance? LocalDate t)
+                     (.toInstant ^LocalDateTime (.atStartOfDay ^LocalDate t) java.time.ZoneOffset/UTC)
+
+                     (instance? LocalDateTime t)
+                     (.toInstant ^LocalDateTime t java.time.ZoneOffset/UTC)
+
+                     :else
+                     t)]
+      (format "yyyy-MM-dd'T'HH:mm:ss'Z'" inst))))
