@@ -1,20 +1,17 @@
 /* eslint-disable react/prop-types */
-import React from "react";
+import { Component } from "react";
 import { t } from "ttag";
 
-import MetabaseSettings from "metabase/lib/settings";
 import { canonicalCollectionId } from "metabase/collections/utils";
-import PopoverWithTrigger from "metabase/components/PopoverWithTrigger";
+import TippyPopoverWithTrigger from "metabase/components/PopoverWithTrigger/TippyPopoverWithTrigger";
 import AccordionList from "metabase/core/components/AccordionList";
-import Icon from "metabase/components/Icon";
+import CS from "metabase/css/core/index.css";
+import { Icon } from "metabase/ui";
 
 const ICON_SIZE = 16;
 
-export default class CollectionOptionsButton extends React.Component {
+export default class CollectionOptionsButton extends Component {
   render() {
-    if (!MetabaseSettings.enhancementsEnabled()) {
-      return null;
-    }
     const items = this.popoverOptions();
     if (items.length === 0) {
       return null;
@@ -29,22 +26,21 @@ export default class CollectionOptionsButton extends React.Component {
         // cap the large ellipsis so it doesn't increase the row height
         style={{ height: ICON_SIZE }}
       >
-        <PopoverWithTrigger
-          triggerElement={
-            <Icon name="ellipsis" size={20} className="hover-child" />
-          }
-        >
-          {({ onClose }) => (
+        <TippyPopoverWithTrigger
+          triggerClasses={CS.hoverChild}
+          triggerContent={<Icon name="ellipsis" size={20} />}
+          placement="bottom-end"
+          popoverContent={({ closePopover }) => (
             <AccordionList
-              className="text-brand"
+              className={CS.textBrand}
               sections={[{ items }]}
               onChange={item => {
-                item.onClick();
-                onClose();
+                item.onClick(item);
+                closePopover();
               }}
             />
           )}
-        </PopoverWithTrigger>
+        />
       </div>
     );
   }

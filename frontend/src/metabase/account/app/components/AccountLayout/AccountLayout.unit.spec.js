@@ -1,5 +1,5 @@
-import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen } from "__support__/ui";
+
 import AccountLayout from "./AccountLayout";
 
 const getUser = () => ({
@@ -15,7 +15,7 @@ describe("AccountLayout", () => {
 
     render(<AccountLayout user={user}>Content</AccountLayout>);
 
-    screen.getByText("Profile");
-    screen.getByText("Content");
+    expect(screen.getByText("Profile")).toBeInTheDocument();
+    expect(screen.getByText("Content")).toBeInTheDocument();
   });
 });

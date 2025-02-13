@@ -1,9 +1,20 @@
-import { handleActions, createAction } from "redux-actions";
-import { updateIn, assoc } from "icepick";
+import { assoc, getIn, updateIn } from "icepick";
+import { createAction, handleActions } from "redux-actions";
 
 export const setRequestLoading = createAction(
   "metabase/requests/SET_REQUEST_LOADING",
-  (statePath, queryKey) => ({ statePath, queryKey }),
+  (statePath, queryKey) => ({
+    statePath,
+    queryKey,
+  }),
+);
+export const setRequestPromise = createAction(
+  "metabase/requests/SET_REQUEST_PROMISE",
+  (statePath, queryKey, queryPromise) => ({
+    statePath,
+    queryKey,
+    queryPromise,
+  }),
 );
 export const setRequestLoaded = createAction(
   "metabase/requests/SET_REQUEST_LOADED",
@@ -29,12 +40,20 @@ const initialRequestState = {
 const requestStateReducer = handleActions(
   {
     [setRequestLoading]: {
-      next: (state, { payload: { queryKey } }) => ({
+      next: (state, { payload: { queryKey, queryPromise } }) => ({
         ...state,
         queryKey,
+        queryPromise,
         loading: true,
         loaded: false,
         error: null,
+      }),
+    },
+    [setRequestPromise]: {
+      next: (state, { payload: { queryKey, queryPromise } }) => ({
+        ...state,
+        queryKey,
+        queryPromise,
       }),
     },
     [setRequestLoaded]: {
@@ -61,6 +80,7 @@ const requestStateReducer = handleActions(
         ...state,
         loaded: false,
         error: null,
+        queryPromise: null,
       }),
     },
   },
@@ -78,11 +98,21 @@ function requestStateReducerRecursive(state, action) {
   }
 }
 
+const isBulkInvalidation = statePath => {
+  // Bulk invalidations only have a statePath with a length of 2
+  return statePath.length <= 2;
+};
+
 export default (state = {}, action) => {
   if (action && action.payload && action.payload.statePath) {
-    state = updateIn(state, action.payload.statePath, subState =>
-      requestStateReducerRecursive(subState, action),
-    );
+    const statePath = action.payload.statePath;
+    const hasStateToUpdate = !!getIn(state, statePath);
+
+    if (hasStateToUpdate || !isBulkInvalidation(statePath)) {
+      state = updateIn(state, action.payload.statePath, subState =>
+        requestStateReducerRecursive(subState, action),
+      );
+    }
   }
   return state;
 };

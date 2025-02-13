@@ -11,38 +11,34 @@
   ## Quartz JavaDoc
 
   Find the JavaDoc for Quartz here: http://www.quartz-scheduler.org/api/2.3.0/index.html"
-  (:require [clojure.java.jdbc :as jdbc]
-            [clojure.string :as str]
-            [clojure.tools.logging :as log]
-            [clojurewerkz.quartzite.scheduler :as qs]
-            [metabase.db :as mdb]
-            [metabase.plugins.classloader :as classloader]
-            [metabase.util :as u]
-            [metabase.util.i18n :refer [trs]]
-            [schema.core :as s]
-            [toucan.db :as db])
-  (:import [org.quartz CronTrigger JobDetail JobKey Scheduler Trigger TriggerKey]))
+  (:require
+   [clojure.string :as str]
+   [clojurewerkz.quartzite.scheduler :as qs]
+   [environ.core :as env]
+   [metabase.db :as mdb]
+   [metabase.plugins.classloader :as classloader]
+   [metabase.task.bootstrap]
+   [metabase.util :as u]
+   [metabase.util.log :as log]
+   [metabase.util.malli :as mu]
+   [metabase.util.malli.schema :as ms])
+  (:import
+   (org.quartz CronTrigger JobDetail JobKey JobPersistenceException ObjectAlreadyExistsException Scheduler Trigger TriggerKey)))
+
+(set! *warn-on-reflection* true)
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
 ;;; |                                               SCHEDULER INSTANCE                                               |
 ;;; +----------------------------------------------------------------------------------------------------------------+
 
-(def ^:dynamic *quartz-scheduler*
-  "Override the global Quartz scheduler by binding this var."
-  nil)
-
-(defonce ^:private quartz-scheduler
+(defonce ^:dynamic ^{:doc "Override the global Quartz scheduler by binding this var."}
+  *quartz-scheduler*
   (atom nil))
 
-;; TODO - maybe we should make this a delay instead!
 (defn- scheduler
-  "Fetch the instance of our Quartz scheduler. Call this function rather than dereffing the atom directly because there
-  are a few places (e.g., in tests) where we swap the instance out."
-  ;; TODO - why can't we just swap the atom out in the tests?
+  "Fetch the instance of our Quartz scheduler."
   ^Scheduler []
-  (or *quartz-scheduler*
-      @quartz-scheduler))
-
+  @*quartz-scheduler*)
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
 ;;; |                                            FINDING & LOADING TASKS                                             |
@@ -62,17 +58,6 @@
   {:arglists '([job-name-string])}
   keyword)
 
-(defn- find-and-load-task-namespaces!
-  "Search Classpath for namespaces that start with `metabase.tasks.`, then `require` them so initialization can happen."
-  []
-  (doseq [ns-symb u/metabase-namespace-symbols
-          :when   (.startsWith (name ns-symb) "metabase.task.")]
-    (try
-      (log/debug (trs "Loading tasks namespace:") (u/format-color 'blue ns-symb))
-      (classloader/require ns-symb)
-      (catch Throwable e
-        (log/error e (trs "Error loading tasks namespace {0}" ns-symb))))))
-
 (defn- init-tasks!
   "Call all implementations of `init!`"
   []
@@ -80,141 +65,149 @@
     (try
       ;; don't bother logging namespace for now, maybe in the future if there's tasks of the same name in multiple
       ;; namespaces we can log it
-      (log/info (trs "Initializing task {0}" (u/format-color 'green (name k))) (u/emoji "📆"))
+      (log/info "Initializing task" (u/format-color 'green (name k)) (u/emoji "📆"))
       (f k)
       (catch Throwable e
-        (log/error e (trs "Error initializing task {0}" k))))))
-
-
-;;; +----------------------------------------------------------------------------------------------------------------+
-;;; |                                      Quartz Scheduler Connection Provider                                      |
-;;; +----------------------------------------------------------------------------------------------------------------+
-
-;; Custom `ConnectionProvider` implementation that uses our application DB connection pool to provide connections.
-
-(defrecord ^:private ConnectionProvider []
-  org.quartz.utils.ConnectionProvider
-  (initialize [_])
-  (getConnection [_]
-    ;; get a connection from our application DB connection pool. Quartz will close it (i.e., return it to the pool)
-    ;; when it's done
-    ;;
-    ;; very important! Fetch a new connection from the connection pool rather than using currently bound Connection if
-    ;; one already exists -- because Quartz will close this connection when done, we don't want to screw up the
-    ;; calling block
-    ;;
-    ;; in a perfect world we could just check whether we're creating a new Connection or not, and if using an existing
-    ;; Connection, wrap it in a delegating proxy wrapper that makes `.close()` a no-op but forwards all other methods.
-    ;; Now that would be a useful macro!
-    (some-> @@#'db/default-db-connection jdbc/get-connection))
-  (shutdown [_]))
-
-(when-not *compile-files*
-  (System/setProperty "org.quartz.dataSource.db.connectionProvider.class" (.getName ConnectionProvider)))
-
-
-;;; +----------------------------------------------------------------------------------------------------------------+
-;;; |                                       Quartz Scheduler Class Load Helper                                       |
-;;; +----------------------------------------------------------------------------------------------------------------+
-
-(defn- load-class ^Class [^String class-name]
-  (Class/forName class-name true (classloader/the-classloader)))
-
-(defrecord ^:private ClassLoadHelper []
-  org.quartz.spi.ClassLoadHelper
-  (initialize [_])
-  (getClassLoader [_]
-    (classloader/the-classloader))
-  (loadClass [_ class-name]
-    (load-class class-name))
-  (loadClass [_ class-name _]
-    (load-class class-name)))
-
-(when-not *compile-files*
-  (System/setProperty "org.quartz.scheduler.classLoadHelper.class" (.getName ClassLoadHelper)))
-
+        (log/errorf e "Error initializing task %s" k)))))
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
 ;;; |                                          STARTING/STOPPING SCHEDULER                                           |
 ;;; +----------------------------------------------------------------------------------------------------------------+
 
-(defn- set-jdbc-backend-properties!
-  "Set the appropriate system properties needed so Quartz can connect to the JDBC backend. (Since we don't know our DB
-  connection properties ahead of time, we'll need to set these at runtime rather than Setting them in the
-  `quartz.properties` file.)"
-  []
-  (when (= (mdb/db-type) :postgres)
-    (System/setProperty "org.quartz.jobStore.driverDelegateClass" "org.quartz.impl.jdbcjobstore.PostgreSQLDelegate")))
+(defn- set-jdbc-backend-properties! []
+  (metabase.task.bootstrap/set-jdbc-backend-properties! (mdb/db-type)))
 
-(defn start-scheduler!
-  "Start our Quartzite scheduler which allows jobs to be submitted and triggers to begin executing."
+(defn- delete-jobs-with-no-class!
+  "Delete any jobs that have been scheduled but whose class is no longer available."
+  []
+  (when-let [scheduler (scheduler)]
+    (doseq [job-key (.getJobKeys scheduler nil)]
+      (try
+        (qs/get-job scheduler job-key)
+        (catch JobPersistenceException e
+          (when (instance? ClassNotFoundException (.getCause e))
+            (log/warnf "Deleting job %s due to class not found (%s)"
+                       (.getName ^JobKey job-key)
+                       (ex-message (.getCause e)))
+            (qs/delete-job scheduler job-key)))))))
+
+(defn- init-scheduler!
+  "Initialize our Quartzite scheduler which allows jobs to be submitted and triggers to scheduled. Puts scheduler in
+  standby mode. Call [[start-scheduler!]] to begin running scheduled tasks."
   []
   (classloader/the-classloader)
-  (when-not @quartz-scheduler
+  (when-not @*quartz-scheduler*
     (set-jdbc-backend-properties!)
     (let [new-scheduler (qs/initialize)]
-      (when (compare-and-set! quartz-scheduler nil new-scheduler)
-        (find-and-load-task-namespaces!)
-        (qs/start new-scheduler)
+      (when (compare-and-set! *quartz-scheduler* nil new-scheduler)
+        (qs/standby new-scheduler)
+        (log/info "Task scheduler initialized into standby mode.")
+        (delete-jobs-with-no-class!)
         (init-tasks!)))))
+
+;;; this is a function mostly to facilitate testing.
+(defn- disable-scheduler? []
+  (some-> (env/env :mb-disable-scheduler) Boolean/parseBoolean))
+
+(defn start-scheduler!
+  "Start the task scheduler. Tasks do not run before calling this function."
+  []
+  (if (disable-scheduler?)
+    (log/warn  "Metabase task scheduler disabled. Scheduled tasks will not be ran.")
+    (do (init-scheduler!)
+        (qs/start (scheduler))
+        (log/info "Task scheduler started"))))
 
 (defn stop-scheduler!
   "Stop our Quartzite scheduler and shutdown any running executions."
   []
-  (let [[old-scheduler] (reset-vals! quartz-scheduler nil)]
+  (let [[old-scheduler] (reset-vals! *quartz-scheduler* nil)]
     (when old-scheduler
       (qs/shutdown old-scheduler))))
-
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
 ;;; |                                           SCHEDULING/DELETING TASKS                                            |
 ;;; +----------------------------------------------------------------------------------------------------------------+
 
-(s/defn ^:private reschedule-task!
-  [job :- JobDetail, new-trigger :- Trigger]
+(mu/defn- reschedule-task!
+  "Assuming that [[job]] is already registered, ensure that [[new-trigger]] is scheduled to trigger it."
+  [job         :- (ms/InstanceOfClass JobDetail)
+   new-trigger :- (ms/InstanceOfClass Trigger)]
   (try
     (when-let [scheduler (scheduler)]
-      (when-let [[^Trigger old-trigger] (seq (qs/get-triggers-of-job scheduler (.getKey job)))]
-        (log/debug (trs "Rescheduling job {0}" (-> job .getKey .getName)))
-        (.rescheduleJob scheduler (.getKey old-trigger) new-trigger)))
+      (let [job-key          (.getKey ^JobDetail job)
+            new-trigger-key  (.getKey ^Trigger new-trigger)
+            triggers         (try (qs/get-triggers-of-job scheduler job-key) (catch Exception _))
+            matching-trigger (first (filter (comp #{new-trigger-key} #(.getKey ^Trigger %)) triggers))
+            replaced-trigger (or matching-trigger (first triggers))]
+        (log/debugf "Rescheduling job %s" (.getName job-key))
+        (if-not replaced-trigger
+          (.scheduleJob scheduler new-trigger)
+          (let [replaced-key (.getKey ^Trigger replaced-trigger)]
+            (when-not matching-trigger
+              (log/warnf "Replacing trigger %s with trigger %s%s"
+                         (.getName replaced-key)
+                         (.getName new-trigger-key)
+                         (when (> (count triggers) 1)
+                           ;; We probably want more intuitive rescheduling semantics for multi-trigger jobs...
+                           ;; Ideally we would pass *all* the new triggers at once, so we can match them up atomically.
+                           ;; The current behavior is especially confounding if replacing N triggers with M ones.
+                           (str " (chosen randomly from " (count triggers) " existing ones)"))))
+            (.rescheduleJob scheduler replaced-key new-trigger)))))
     (catch Throwable e
-      (log/error e (trs "Error rescheduling job")))))
+      (log/error e "Error rescheduling job"))))
 
-(s/defn schedule-task!
+(mu/defn reschedule-trigger!
+  "Reschedule a trigger with the same key as the given trigger.
+
+  Used to update trigger properties like priority."
+  [trigger :- (ms/InstanceOfClass Trigger)]
+  (when-let [scheduler (scheduler)]
+    (.rescheduleJob scheduler (.getKey ^Trigger trigger) trigger)))
+
+(mu/defn schedule-task!
   "Add a given job and trigger to our scheduler."
-  [job :- JobDetail, trigger :- Trigger]
+  [job :- (ms/InstanceOfClass JobDetail) trigger :- (ms/InstanceOfClass Trigger)]
   (when-let [scheduler (scheduler)]
     (try
       (qs/schedule scheduler job trigger)
-      (catch org.quartz.ObjectAlreadyExistsException _
-        (log/debug (trs "Job already exists:") (-> job .getKey .getName))
+      (catch ObjectAlreadyExistsException _
+        (log/debug "Job already exists:" (-> ^JobDetail job .getKey .getName))
         (reschedule-task! job trigger)))))
 
-(s/defn delete-task!
-  "delete a task from the scheduler"
-  [job-key :- JobKey, trigger-key :- TriggerKey]
+(mu/defn trigger-now!
+  "Immediately trigger execution of task"
+  [job-key :- (ms/InstanceOfClass JobKey)]
+  (try
+    (when-let [scheduler (scheduler)]
+      (.triggerJob scheduler job-key))
+    (catch Throwable e
+      (log/errorf e "Failed to trigger immediate execution of task %s" job-key))))
+
+(mu/defn delete-task!
+  "Delete a task from the scheduler"
+  [job-key :- (ms/InstanceOfClass JobKey) trigger-key :- (ms/InstanceOfClass TriggerKey)]
   (when-let [scheduler (scheduler)]
     (qs/delete-trigger scheduler trigger-key)
     (qs/delete-job scheduler job-key)))
 
-(s/defn add-job!
+(mu/defn add-job!
   "Add a job separately from a trigger, replace if the job is already there"
-  [job :- JobDetail]
+  [job :- (ms/InstanceOfClass JobDetail)]
   (when-let [scheduler (scheduler)]
     (qs/add-job scheduler job true)))
 
-(s/defn add-trigger!
+(mu/defn add-trigger!
   "Add a trigger. Assumes the trigger is already associated to a job (i.e. `trigger/for-job`)"
-  [trigger :- Trigger]
+  [trigger :- (ms/InstanceOfClass Trigger)]
   (when-let [scheduler (scheduler)]
     (qs/add-trigger scheduler trigger)))
 
-(s/defn delete-trigger!
+(mu/defn delete-trigger!
   "Remove `trigger-key` from the scheduler"
-  [trigger-key :- TriggerKey]
+  [trigger-key :- (ms/InstanceOfClass TriggerKey)]
   (when-let [scheduler (scheduler)]
     (qs/delete-trigger scheduler trigger-key)))
-
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
 ;;; |                                                 Scheduler Info                                                 |
@@ -244,7 +237,7 @@
    :priority           (.getPriority trigger)
    :start-time         (.getStartTime trigger)
    :may-fire-again?    (.mayFireAgain trigger)
-   :data               (.getJobDataMap trigger)})
+   :data               (into {} (.getJobDataMap trigger))})
 
 (defmethod trigger->info CronTrigger
   [^CronTrigger trigger]
@@ -252,6 +245,9 @@
    ((get-method trigger->info Trigger) trigger)
    :schedule
    (.getCronExpression trigger)
+
+   :timezone
+   (.getID (.getTimeZone trigger))
 
    :misfire-instruction
    ;; not 100% sure why `case` doesn't work here...
@@ -267,6 +263,14 @@
     (instance? JobKey x) x
     (string? x)          (JobKey. ^String x)))
 
+(defn job-exists?
+  "Check whether there is a Job with the given key."
+  [job-key]
+  (boolean
+   (let [s (scheduler)]
+     (when (and s (not (.isShutdown s)))
+       (qs/get-job s (->job-key job-key))))))
+
 (defn job-info
   "Get info about a specific Job (`job-key` can be either a String or `JobKey`).
 
@@ -279,14 +283,21 @@
                :triggers (for [trigger (sort-by #(-> ^Trigger % .getKey .getName)
                                                 (qs/get-triggers-of-job scheduler job-key))]
                            (trigger->info trigger)))
+        (catch ClassNotFoundException _
+          (log/infof "Class not found for Quartz Job %s. This probably means that this job was removed or renamed." (.getName job-key)))
         (catch Throwable e
-          (log/warn e (trs "Error fetching details for Job: {0}" (.getName job-key))))))))
+          (log/warnf e "Error fetching details for Quartz Job: %s" (.getName job-key)))))))
 
 (defn- jobs-info []
   (->> (some-> (scheduler) (.getJobKeys nil))
        (sort-by #(.getName ^JobKey %))
        (map job-info)
        (filter some?)))
+
+(defn existing-triggers
+  "Get the existing triggers for a job by key name, if it exists."
+  [job-key trigger-key]
+  (filter #(= (:key %) (.getName ^TriggerKey trigger-key)) (:triggers (job-info job-key))))
 
 (defn scheduler-info
   "Return raw data about all the scheduler and scheduled tasks (i.e. Jobs and Triggers). Primarily for debugging

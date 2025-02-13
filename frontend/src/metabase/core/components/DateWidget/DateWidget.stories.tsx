@@ -1,6 +1,7 @@
-import React, { useState } from "react";
-import { Moment } from "moment";
-import { ComponentStory } from "@storybook/react";
+import type { StoryFn } from "@storybook/react";
+import type { Moment } from "moment-timezone";
+import { useState } from "react";
+
 import DateWidget from "./DateWidget";
 
 export default {
@@ -8,14 +9,19 @@ export default {
   component: DateWidget,
 };
 
-const Template: ComponentStory<typeof DateWidget> = args => {
+const Template: StoryFn<typeof DateWidget> = args => {
   const [value, setValue] = useState<Moment>();
   return <DateWidget {...args} value={value} onChange={setValue} />;
 };
 
-export const Default = Template.bind({});
+export const Default = {
+  render: Template,
+};
 
-export const WithTime = Template.bind({});
-WithTime.args = {
-  hasTime: true,
+export const WithTime = {
+  render: Template,
+
+  args: {
+    hasTime: true,
+  },
 };

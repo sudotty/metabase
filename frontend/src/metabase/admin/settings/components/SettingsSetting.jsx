@@ -1,20 +1,29 @@
 /* eslint-disable react/prop-types */
-import React, { Component } from "react";
-import PropTypes from "prop-types";
-import { assocIn } from "icepick";
+import { useEffect, useRef, useState } from "react";
+import scrollIntoView from "scroll-into-view-if-needed";
+import { jt } from "ttag";
+
+import ExternalLink from "metabase/core/components/ExternalLink";
+import { alpha } from "metabase/lib/colors";
+import { Box } from "metabase/ui";
+
+import { settingToFormFieldId, useGetEnvVarDocsUrl } from "../utils";
 
 import SettingHeader from "./SettingHeader";
-import { t } from "ttag";
-
-import SettingInput from "./widgets/SettingInput";
+import {
+  SettingContent,
+  SettingEnvVarMessage,
+  SettingErrorMessage,
+  SettingRoot,
+  SettingWarningMessage,
+} from "./SettingsSetting.styled";
+import { SettingInput } from "./widgets/SettingInput";
 import SettingNumber from "./widgets/SettingNumber";
 import SettingPassword from "./widgets/SettingPassword";
 import SettingRadio from "./widgets/SettingRadio";
-import SettingToggle from "./widgets/SettingToggle";
-import SettingSelect from "./widgets/SettingSelect";
 import SettingText from "./widgets/SettingText";
-import SettingColor from "./widgets/SettingColor";
-import { settingToFormFieldId } from "./../../settings/utils";
+import { SettingToggle } from "./widgets/SettingToggle";
+import SettingSelect from "./widgets/deprecated/SettingSelect";
 
 const SETTING_WIDGET_MAP = {
   string: SettingInput,
@@ -24,62 +33,105 @@ const SETTING_WIDGET_MAP = {
   radio: SettingRadio,
   boolean: SettingToggle,
   text: SettingText,
-  color: SettingColor,
+  hidden: () => null,
 };
 
-const updatePlaceholderForEnvironmentVars = props => {
-  if (props && props.setting && props.setting.is_env_setting) {
-    return assocIn(
-      props,
-      ["setting", "placeholder"],
-      t`Using ` + props.setting.env_name,
+export const SettingsSetting = props => {
+  const [fancyStyle, setFancyStyle] = useState({});
+  const thisRef = useRef();
+
+  // we don't want to pass down autoScrollIntoView to the widget
+  const { autoScrollIntoView, ...propsToPassDown } = props;
+
+  const { setting, settingValues, errorMessage } = props;
+
+  useEffect(() => {
+    if (autoScrollIntoView && thisRef.current) {
+      scrollIntoView(thisRef.current, {
+        behavior: "smooth",
+        block: "center",
+        scrollMode: "if-needed",
+      });
+
+      setFancyStyle({
+        background: alpha("brand", 0.1),
+        boxShadow: `0 0 0 1px var(--mb-color-brand)`,
+      });
+
+      setTimeout(() => {
+        setFancyStyle({});
+      }, 1500);
+    }
+  }, [autoScrollIntoView]);
+
+  const settingId = settingToFormFieldId(setting);
+
+  let Widget = setting.widget || SETTING_WIDGET_MAP[setting.type];
+  if (!Widget) {
+    console.warn(
+      "No render method for setting type " +
+        setting.type +
+        ", defaulting to string input.",
     );
+    Widget = SettingInput;
   }
-  return props;
-};
 
-export default class SettingsSetting extends Component {
-  static propTypes = {
-    setting: PropTypes.object.isRequired,
-    onChange: PropTypes.func.isRequired,
-    onChangeSetting: PropTypes.func,
-    autoFocus: PropTypes.bool,
-    disabled: PropTypes.bool,
+  const widgetProps = {
+    ...setting.getProps?.(setting, settingValues),
+    ...setting.props,
+    ...propsToPassDown,
   };
 
-  render() {
-    const { setting, errorMessage } = this.props;
-    const settingId = settingToFormFieldId(setting);
+  return (
+    // TODO - this formatting needs to be moved outside this component
+    <SettingRoot
+      data-testid={`${setting.key}-setting`}
+      ref={thisRef}
+      style={{
+        transition: "500ms ease all",
+        ...fancyStyle,
+      }}
+    >
+      {!setting.noHeader && <SettingHeader id={settingId} setting={setting} />}
+      <SettingContent>
+        {setting.is_env_setting && !setting.forceRenderWidget ? (
+          <SetByEnvVar setting={setting} />
+        ) : (
+          <Widget id={settingId} {...widgetProps} />
+        )}
+      </SettingContent>
+      {errorMessage && (
+        <SettingErrorMessage>{errorMessage}</SettingErrorMessage>
+      )}
+      {setting.warning && (
+        <SettingWarningMessage>{setting.warning}</SettingWarningMessage>
+      )}
+    </SettingRoot>
+  );
+};
 
-    let Widget = setting.widget || SETTING_WIDGET_MAP[setting.type];
-    if (!Widget) {
-      console.warn(
-        "No render method for setting type " +
-          setting.type +
-          ", defaulting to string input.",
-      );
-      Widget = SettingInput;
-    }
+export const SetByEnvVar = ({ setting }) => {
+  const { url: docsUrl } = useGetEnvVarDocsUrl(setting.env_name);
+
+  return (
+    <SettingEnvVarMessage data-testid="setting-env-var-message">
+      {jt`This has been set by the ${(
+        <ExternalLink key={docsUrl} href={docsUrl}>
+          {setting.env_name}
+        </ExternalLink>
+      )} environment variable.`}
+    </SettingEnvVarMessage>
+  );
+};
+
+export const SetByEnvVarWrapper = ({ setting, children }) => {
+  if (setting.is_env_setting) {
     return (
-      // TODO - this formatting needs to be moved outside this component
-      <li className="m2 mb4">
-        {!setting.noHeader && (
-          <SettingHeader id={settingId} setting={setting} />
-        )}
-        <div className="flex">
-          <Widget
-            id={settingId}
-            {...(setting.props || {})}
-            {...updatePlaceholderForEnvironmentVars(this.props)}
-          />
-        </div>
-        {errorMessage && (
-          <div className="text-error text-bold pt1">{errorMessage}</div>
-        )}
-        {setting.warning && (
-          <div className="text-gold text-bold pt1">{setting.warning}</div>
-        )}
-      </li>
+      <Box mb="lg">
+        <SettingHeader id={setting.key} setting={setting} />
+        <SetByEnvVar setting={setting} />
+      </Box>
     );
   }
-}
+  return children;
+};

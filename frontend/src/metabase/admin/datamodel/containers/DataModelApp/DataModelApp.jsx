@@ -1,15 +1,15 @@
-import React, { useMemo } from "react";
 import PropTypes from "prop-types";
+import { Fragment, useMemo } from "react";
 import { push } from "react-router-redux";
-import { connect } from "react-redux";
 import { t } from "ttag";
 
-import { useToggle } from "metabase/hooks/use-toggle";
-
 import Radio from "metabase/core/components/Radio";
+import { useToggle } from "metabase/hooks/use-toggle";
+import { connect } from "metabase/lib/redux";
+import { getUserIsAdmin } from "metabase/selectors/user";
 
+import { ModelEducationButton, NavBar } from "./DataModelApp.styled";
 import { ModelEducationalModal } from "./ModelEducationalModal";
-import { NavBar, ModelEducationButton } from "./DataModelApp.styled";
 
 const propTypes = {
   onChangeTab: PropTypes.func.isRequired,
@@ -17,7 +17,12 @@ const propTypes = {
     pathname: PropTypes.string.isRequired,
   }).isRequired,
   children: PropTypes.node.isRequired,
+  isAdmin: PropTypes.bool,
 };
+
+const mapStateToProps = state => ({
+  isAdmin: getUserIsAdmin(state),
+});
 
 const mapDispatchToProps = {
   onChangeTab: tab => push(`/admin/datamodel/${tab}`),
@@ -25,11 +30,15 @@ const mapDispatchToProps = {
 
 const TAB = {
   SEGMENTS: "segments",
-  METRICS: "metrics",
   DATABASE: "database",
 };
 
-function DataModelApp({ children, onChangeTab, location: { pathname } }) {
+function DataModelApp({
+  children,
+  onChangeTab,
+  location: { pathname },
+  isAdmin,
+}) {
   const [
     isModelEducationalModalShown,
     { turnOn: showModelEducationalModal, turnOff: hideModelEducationalModal },
@@ -39,22 +48,20 @@ function DataModelApp({ children, onChangeTab, location: { pathname } }) {
     if (/\/segments?/.test(pathname)) {
       return TAB.SEGMENTS;
     }
-    if (/\/metrics?/.test(pathname)) {
-      return TAB.METRICS;
-    }
     return TAB.DATABASE;
   }, [pathname]);
 
+  const options = [
+    { name: t`Data`, value: TAB.DATABASE },
+    ...(isAdmin ? [{ name: t`Segments`, value: TAB.SEGMENTS }] : []),
+  ];
+
   return (
-    <React.Fragment>
+    <Fragment>
       <NavBar>
         <Radio
           value={currentTab}
-          options={[
-            { name: t`Data`, value: TAB.DATABASE },
-            { name: t`Segments`, value: TAB.SEGMENTS },
-            { name: t`Metrics`, value: TAB.METRICS },
-          ]}
+          options={options}
           onChange={onChangeTab}
           variant="underlined"
         />
@@ -67,10 +74,10 @@ function DataModelApp({ children, onChangeTab, location: { pathname } }) {
         onClose={hideModelEducationalModal}
       />
       {children}
-    </React.Fragment>
+    </Fragment>
   );
 }
 
 DataModelApp.propTypes = propTypes;
 
-export default connect(null, mapDispatchToProps)(DataModelApp);
+export default connect(mapStateToProps, mapDispatchToProps)(DataModelApp);

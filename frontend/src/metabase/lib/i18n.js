@@ -1,17 +1,26 @@
+import dayjs from "dayjs";
+import moment from "moment-timezone"; // eslint-disable-line no-restricted-imports -- deprecated usage
 import { addLocale, useLocale } from "ttag";
-import moment from "moment-timezone";
 
+import { isEmbeddingSdk } from "metabase/env";
+import api from "metabase/lib/api";
+import { DAY_OF_WEEK_OPTIONS } from "metabase/lib/date-time";
 import MetabaseSettings from "metabase/lib/settings";
 
 // note this won't refresh strings that are evaluated at load time
 export async function loadLocalization(locale) {
   // we need to be sure to set the initial localization before loading any files
   // so load metabase/services only when we need it
-  const { I18NApi } = require("metabase/services");
   // load and parse the locale
   const translationsObject =
     locale !== "en"
-      ? await I18NApi.locale({ locale })
+      ? // We don't use I18NApi.locale/the GET helper because those helpers adds custom headers,
+        // which will make the browser do the pre-flight request on the SDK.
+        // The backend doesn't seem to support pre-flight request on the static assets, but even
+        // if it supported them it's more performant to skip the pre-flight request
+        await fetch(`${api.basename}/app/locales/${locale}.json`).then(
+          response => response.json(),
+        )
       : // We don't serve en.json. Instead, use this object to fall back to theliterals.
         {
           headers: {
@@ -19,88 +28,116 @@ export async function loadLocalization(locale) {
             "plural-forms": "nplurals=2; plural=(n != 1);",
           },
           translations: {
+            // eslint-disable-next-line no-literal-metabase-strings -- Not a user facing string
             "": { Metabase: { msgid: "Metabase", msgstr: ["Metabase"] } },
           },
         };
   setLocalization(translationsObject);
+
+  return translationsObject;
 }
 
-// Tell Moment.js to use the value of the start-of-week Setting for its current locale
-function updateMomentStartOfWeek() {
-  const startOfWeekDayName = MetabaseSettings.get("start-of-week");
+// Tell moment.js and dayjs to use the value of the start-of-week Setting for its current locale
+// Moment.js dow range Sunday (0) - Saturday (6)
+export function updateStartOfWeek(startOfWeekDayName) {
+  const startOfWeekDay = getStartOfWeekDay(startOfWeekDayName);
+  if (startOfWeekDay != null) {
+    moment.updateLocale(moment.locale(), { week: { dow: startOfWeekDay } });
+    dayjs.updateLocale(dayjs.locale(), { weekStart: startOfWeekDay });
+  }
+}
+
+// if the start of week Setting is updated, update the moment start of week
+MetabaseSettings.on("start-of-week", updateStartOfWeek);
+
+function setLanguage(translationsObject) {
+  const locale = translationsObject.headers.language;
+  addMsgIds(translationsObject);
+
+  // add and set locale with ttag
+  addLocale(locale, translationsObject);
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  useLocale(locale);
+}
+
+const ARABIC_LOCALES = ["ar", "ar-sa"];
+
+export function setLocalization(translationsObject) {
+  const language = translationsObject.headers.language;
+  setLanguage(translationsObject);
+  updateMomentLocale(language);
+  updateDayjsLocale(language);
+  updateStartOfWeek(MetabaseSettings.get("start-of-week"));
+
+  if (ARABIC_LOCALES.includes(language)) {
+    preverseLatinNumbersInMomentLocale(language);
+  }
+}
+
+function updateMomentLocale(language) {
+  const locale = getLocale(language);
+
+  try {
+    if (locale !== "en") {
+      require(`moment/locale/${locale}.js`);
+    }
+    moment.locale(locale);
+  } catch (e) {
+    console.warn(`Could not set moment.js locale to ${locale}`);
+    moment.locale("en");
+  }
+}
+
+/**
+ * Ensures that we consistently use latin numbers in Arabic locales.
+ * See https://github.com/metabase/metabase/issues/34271
+ */
+function preverseLatinNumbersInMomentLocale(locale) {
+  moment.updateLocale(locale, {
+    // Preserve latin numbers, but still replace commas.
+    // See https://github.com/moment/moment/blob/000ac1800e620f770f4eb31b5ae908f6167b0ab2/locale/ar.js#L185
+    postformat: string =>
+      string.replace(/\d/g, match => match).replace(/,/g, "،"),
+  });
+}
+
+function updateDayjsLocale(language) {
+  const locale = getLocale(language);
+
+  try {
+    if (locale !== "en") {
+      require(`dayjs/locale/${locale}.js`);
+    }
+    dayjs.locale(locale);
+  } catch (e) {
+    console.warn(`Could not set day.js locale to ${locale}`);
+    dayjs.locale("en");
+  }
+}
+
+function getLocale(language = "") {
+  switch (language) {
+    case "zh":
+    case "zh-Hans":
+      return "zh-cn";
+    default:
+      return language.toLowerCase();
+  }
+}
+
+function getStartOfWeekDay(startOfWeekDayName) {
   if (!startOfWeekDayName) {
     return;
   }
 
-  const START_OF_WEEK_DAYS = [
-    "sunday",
-    "monday",
-    "tuesday",
-    "wednesday",
-    "thursday",
-    "friday",
-    "saturday",
-  ];
-
-  const startOfWeekDayNumber = START_OF_WEEK_DAYS.indexOf(startOfWeekDayName);
+  const startOfWeekDayNumber = DAY_OF_WEEK_OPTIONS.findIndex(
+    ({ id }) => id === startOfWeekDayName,
+  );
   if (startOfWeekDayNumber === -1) {
     return;
   }
-  console.log(
-    "Setting moment.js start of week for Locale",
-    moment.locale(),
-    "to",
-    startOfWeekDayName,
-  );
 
-  moment.updateLocale(moment.locale(), {
-    week: {
-      // Moment.js dow range Sunday (0) - Saturday (6)
-      dow: startOfWeekDayNumber,
-    },
-  });
-}
-
-// if the start of week Setting is updated, update the moment start of week
-MetabaseSettings.on("start-of-week", updateMomentStartOfWeek);
-
-export function setLocalization(translationsObject) {
-  const locale = translationsObject.headers.language;
-
-  addMsgIds(translationsObject);
-
-  // add and set locale with C-3PO
-  addLocale(locale, translationsObject);
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  useLocale(locale);
-
-  updateMomentLocale(locale);
-  updateMomentStartOfWeek(locale);
-}
-
-function updateMomentLocale(locale) {
-  const momentLocale = mapToMomentLocale(locale);
-  if (momentLocale !== "en") {
-    require("moment/locale/" + momentLocale);
-  }
-
-  moment.locale(momentLocale);
-}
-
-function mapToMomentLocale(locale = "") {
-  switch (locale) {
-    case "zh-Hans":
-      return "zh-cn";
-    default:
-      return locale.toLowerCase();
-  }
-}
-
-// Format a fixed timestamp in local time to see if the current locale defaults
-// to using a 24 hour clock.
-export function isLocale24Hour() {
-  const formattedTime = moment("2000-01-01T13:00:00").format("LT");
-  return /^13:/.test(formattedTime);
+  return startOfWeekDayNumber;
 }
 
 // we delete msgid property since it's redundant, but have to add it back in to
@@ -114,7 +151,51 @@ function addMsgIds(translationsObject) {
   }
 }
 
-// set the initial localization
-if (window.MetabaseLocalization) {
-  setLocalization(window.MetabaseLocalization);
+// Runs `f` with the current language for ttag set to the instance (site) locale rather than the user locale, then
+// restores the user locale. This can be used for translating specific strings into the instance language; e.g. for
+// parameter values in dashboard text cards that should be translated the same for all users viewing the dashboard.
+export function withInstanceLanguage(f) {
+  if (window.MetabaseSiteLocalization) {
+    setLanguage(window.MetabaseSiteLocalization);
+  }
+  try {
+    return f();
+  } finally {
+    if (window.MetabaseUserLocalization) {
+      setLanguage(window.MetabaseUserLocalization);
+    }
+  }
+}
+
+export function siteLocale() {
+  if (window.MetabaseSiteLocalization) {
+    return window.MetabaseSiteLocalization.headers.language;
+  }
+}
+
+// register site locale with ttag, if needed later
+if (window.MetabaseSiteLocalization) {
+  const translationsObject = window.MetabaseSiteLocalization;
+  const locale = translationsObject.headers.language;
+  addMsgIds(translationsObject);
+  addLocale(locale, translationsObject);
+}
+
+// set the initial localization to user locale
+if (window.MetabaseUserLocalization) {
+  setLocalization(window.MetabaseUserLocalization);
+}
+
+/**
+ * In static embeddings/public links, there is no user locale, since there is no user in static embeddings/public links.
+ * But we reset the locale to the site locale when `withInstanceLanguage` is called. This breaks static embeddings/public links
+ * since they don't have a user locale. So this function is for them to set the locale from a URL hash as the user locale,
+ * then the translation on some part of FE still works even after `withInstanceLanguage` is called.
+ *
+ * @param {object} translationsObject A translated object with the same structure as the one produced in `loadLocalization` function.
+ */
+export function setUserLocale(translationsObject) {
+  if (!isEmbeddingSdk) {
+    window.MetabaseUserLocalization = translationsObject;
+  }
 }

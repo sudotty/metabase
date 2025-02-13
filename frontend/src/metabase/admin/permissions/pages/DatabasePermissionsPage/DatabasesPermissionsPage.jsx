@@ -1,28 +1,34 @@
-import React, { useCallback } from "react";
+import { bindActionCreators } from "@reduxjs/toolkit";
 import PropTypes from "prop-types";
-import { bindActionCreators } from "redux";
+import { Fragment, useCallback } from "react";
 import { push } from "react-router-redux";
+import { useAsync } from "react-use";
 import { t } from "ttag";
 import _ from "underscore";
-import { connect } from "react-redux";
 
-import {
-  getGroupsDataPermissionEditor,
-  getDataFocusSidebar,
-  getIsLoadingDatabaseTables,
-  getLoadingDatabaseTablesError,
-} from "../../selectors/data-permissions";
-import { updateDataPermission } from "../../permissions";
+import { PermissionsEditorLegacyNoSelfServiceWarning } from "metabase/admin/permissions/components/PermissionsEditor/PermissionsEditorLegacyWarning";
+import { connect, useDispatch, useSelector } from "metabase/lib/redux";
+import { PLUGIN_ADVANCED_PERMISSIONS } from "metabase/plugins";
+import { getSetting } from "metabase/selectors/settings";
+import { PermissionsApi } from "metabase/services";
+import { Center, Loader } from "metabase/ui";
 
-import {
-  PermissionsSidebar,
-  permissionSidebarPropTypes,
-} from "../../components/PermissionsSidebar";
 import {
   PermissionsEditor,
   PermissionsEditorEmptyState,
-  permissionEditorPropTypes,
 } from "../../components/PermissionsEditor";
+import { PermissionsEditorSplitPermsMessage } from "../../components/PermissionsEditor/PermissionsEditorSplitPermsMessage";
+import { PermissionsSidebar } from "../../components/PermissionsSidebar";
+import {
+  LOAD_DATA_PERMISSIONS_FOR_DB,
+  updateDataPermission,
+} from "../../permissions";
+import {
+  getDataFocusSidebar,
+  getGroupsDataPermissionEditor,
+  getIsLoadingDatabaseTables,
+  getLoadingDatabaseTablesError,
+} from "../../selectors/data-permissions";
 import {
   DATABASES_BASE_PATH,
   getDatabaseFocusPermissionsUrl,
@@ -45,7 +51,6 @@ const mapDispatchToProps = dispatch => ({
 const mapStateToProps = (state, props) => {
   return {
     sidebar: getDataFocusSidebar(state, props),
-    permissionEditor: getGroupsDataPermissionEditor(state, props),
     isSidebarLoading: getIsLoadingDatabaseTables(state, props),
     sidebarError: getLoadingDatabaseTablesError(state, props),
   };
@@ -58,30 +63,47 @@ const propTypes = {
     tableId: PropTypes.string,
   }),
   children: PropTypes.node,
-  sidebar: PropTypes.shape(permissionSidebarPropTypes),
-  permissionEditor: PropTypes.shape(permissionEditorPropTypes),
+  sidebar: PropTypes.object,
   navigateToItem: PropTypes.func.isRequired,
   switchView: PropTypes.func.isRequired,
   updateDataPermission: PropTypes.func.isRequired,
   navigateToDatabaseList: PropTypes.func.isRequired,
   isSidebarLoading: PropTypes.bool,
   sidebarError: PropTypes.string,
-  dispatch: PropTypes.func.isRequired,
 };
 
 function DatabasesPermissionsPage({
   sidebar,
-  permissionEditor,
   params,
   children,
   navigateToItem,
   navigateToDatabaseList,
   switchView,
   updateDataPermission,
-  dispatch,
   isSidebarLoading,
   sidebarError,
 }) {
+  const dispatch = useDispatch();
+  const permissionEditor = useSelector(state =>
+    getGroupsDataPermissionEditor(state, { params }),
+  );
+
+  const showSplitPermsMessage = useSelector(state =>
+    getSetting(state, "show-updated-permission-banner"),
+  );
+
+  const { loading: isLoading } = useAsync(async () => {
+    if (params.databaseId) {
+      const response = await PermissionsApi.graphForDB({
+        databaseId: params.databaseId,
+      });
+      await dispatch({
+        type: LOAD_DATA_PERMISSIONS_FOR_DB,
+        payload: response,
+      });
+    }
+  }, [params.databaseId]);
+
   const handleEntityChange = useCallback(
     entityType => {
       switchView(entityType);
@@ -108,8 +130,12 @@ function DatabasesPermissionsPage({
 
   const handleBreadcrumbsItemSelect = item => dispatch(push(item.url));
 
+  const showLegacyNoSelfServiceWarning =
+    PLUGIN_ADVANCED_PERMISSIONS.shouldShowViewDataColumn &&
+    !!permissionEditor?.hasLegacyNoSelfServiceValueInPermissionGraph;
+
   return (
-    <React.Fragment>
+    <Fragment>
       <PermissionsSidebar
         {...sidebar}
         error={sidebarError}
@@ -118,25 +144,41 @@ function DatabasesPermissionsPage({
         onBack={params.databaseId == null ? null : navigateToDatabaseList}
         onEntityChange={handleEntityChange}
       />
-
-      {!permissionEditor && (
+      {isLoading && (
+        <Center style={{ flexGrow: 1 }}>
+          <Loader size="lg" />
+        </Center>
+      )}
+      {!permissionEditor && !isLoading && (
         <PermissionsEditorEmptyState
           icon="database"
           message={t`Select a database to see group permissions`}
         />
       )}
 
-      {permissionEditor && (
+      {permissionEditor && !isLoading && (
         <PermissionsEditor
           {...permissionEditor}
           onBreadcrumbsItemSelect={handleBreadcrumbsItemSelect}
           onChange={handlePermissionChange}
           onAction={handleAction}
+          preHeaderContent={() => (
+            <>
+              {showSplitPermsMessage && <PermissionsEditorSplitPermsMessage />}
+            </>
+          )}
+          postHeaderContent={() => (
+            <>
+              {showLegacyNoSelfServiceWarning && (
+                <PermissionsEditorLegacyNoSelfServiceWarning />
+              )}
+            </>
+          )}
         />
       )}
 
       {children}
-    </React.Fragment>
+    </Fragment>
   );
 }
 

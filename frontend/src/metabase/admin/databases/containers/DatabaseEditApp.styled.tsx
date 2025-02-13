@@ -1,8 +1,9 @@
 import styled from "@emotion/styled";
-import DatabaseHelpCard from "metabase/containers/DatabaseHelpCard";
+
+import { DatabaseHelpCard } from "metabase/databases/components/DatabaseHelpCard";
 import {
-  breakpointMinSmall,
   breakpointMinMedium,
+  breakpointMinSmall,
 } from "metabase/styled-components/theme";
 
 export const DatabaseEditRoot = styled.div`

@@ -1,19 +1,24 @@
 (ns metabase.query-processor.middleware.cache.impl
-  (:require [clojure.tools.logging :as log]
-            [metabase.public-settings :as public-settings]
-            [metabase.util :as u]
-            [metabase.util.i18n :refer [trs]]
-            [taoensso.nippy :as nippy])
-  (:import [java.io BufferedInputStream BufferedOutputStream ByteArrayOutputStream DataInputStream DataOutputStream
-            EOFException FilterOutputStream InputStream OutputStream]
-           [java.util.zip GZIPInputStream GZIPOutputStream]))
+  (:require
+   [flatland.ordered.map :as ordered-map]
+   [metabase.public-settings :as public-settings]
+   [metabase.util :as u]
+   [metabase.util.i18n :refer [trs]]
+   [metabase.util.log :as log]
+   [taoensso.nippy :as nippy])
+  (:import
+   (java.io BufferedInputStream BufferedOutputStream ByteArrayOutputStream DataInputStream DataOutputStream
+            EOFException FilterOutputStream InputStream OutputStream)
+   (java.util.zip GZIPInputStream GZIPOutputStream)))
+
+(set! *warn-on-reflection* true)
 
 (defn- max-bytes-output-stream ^OutputStream
   [max-bytes ^OutputStream os]
   (let [byte-count  (atom 0)
         check-total (fn [current-total]
                       (when (> current-total max-bytes)
-                        (log/info (trs "Results are too large to cache.") (u/emoji "😫"))
+                        (log/info "Results are too large to cache." (u/emoji "😫"))
                         (throw (ex-info (trs "Results are too large to cache.") {:type ::max-bytes}))))]
     (proxy [FilterOutputStream] [os]
       (write
@@ -29,6 +34,16 @@
         ([^bytes ba ^Integer off ^Integer len]
          (check-total (swap! byte-count + len))
          (.write os ba off len))))))
+
+;; flatland.ordered.map.OrderedMap gets encoded and decoded incorrectly, for some reason. See #25915
+
+(nippy/extend-freeze flatland.ordered.map.OrderedMap :flatland/ordered-map
+  [x data-output]
+  (nippy/freeze-to-out! data-output (vec x)))
+
+(nippy/extend-thaw :flatland/ordered-map
+  [data-input]
+  (ordered-map/ordered-map-reader-clj (nippy/thaw-from-in! data-input)))
 
 (defn- freeze!
   [^OutputStream os obj]

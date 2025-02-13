@@ -1,21 +1,31 @@
 (ns metabase.models.query
   "Functions related to the 'Query' model, which records stuff such as average query execution time."
-  (:require [cheshire.core :as json]
-            [metabase.db :as mdb]
-            [metabase.mbql.normalize :as normalize]
-            [metabase.util :as u]
-            [metabase.util.honeysql-extensions :as hx]
-            [toucan.db :as db]
-            [toucan.models :as models]))
+  (:require
+   [clojure.walk :as walk]
+   [metabase.db :as mdb]
+   [metabase.lib.core :as lib]
+   [metabase.lib.metadata :as lib.metadata]
+   [metabase.lib.schema.id :as lib.schema.id]
+   [metabase.lib.util :as lib.util]
+   [metabase.models.interface :as mi]
+   [metabase.util.honey-sql-2 :as h2x]
+   [metabase.util.json :as json]
+   [metabase.util.malli :as mu]
+   [metabase.util.malli.registry :as mr]
+   [metabase.util.malli.schema :as ms]
+   [methodical.core :as methodical]
+   [toucan2.core :as t2]
+   [toucan2.model :as t2.model]))
 
-(models/defmodel Query :query)
+(set! *warn-on-reflection* true)
 
-(u/strict-extend (class Query)
-  models/IModel
-  (merge models/IModelDefaults
-         {:types       (constantly {:query :json})
-          :primary-key (constantly :query_hash)}))
+(methodical/defmethod t2/table-name :model/Query [_model] :query)
+(methodical/defmethod t2.model/primary-keys :model/Query [_model] [:query_hash])
 
+(t2/deftransforms :model/Query
+  {:query mi/transform-json})
+
+(derive :model/Query :metabase/model)
 
 ;;; Helper Fns
 
@@ -24,7 +34,7 @@
    Returns `nil` if no information is available."
   ^Integer [^bytes query-hash]
   {:pre [(instance? (Class/forName "[B") query-hash)]}
-  (db/select-one-field :average_execution_time Query :query_hash query-hash))
+  (t2/select-one-fn :average_execution_time :model/Query :query_hash query-hash))
 
 (defn- int-casting-type
   "Return appropriate type for use in SQL `CAST(x AS type)` statement.
@@ -36,32 +46,34 @@
     :integer))
 
 (defn- update-rolling-average-execution-time!
-  "Update the rolling average execution time for query with QUERY-HASH. Returns `true` if a record was updated,
+  "Update the rolling average execution time for query with `query-hash`. Returns `true` if a record was updated,
    or `false` if no matching records were found."
-  ^Boolean [query, ^bytes query-hash, ^Integer execution-time-ms]
-  (let [avg-execution-time (hx/cast (int-casting-type) (hx/round (hx/+ (hx/* 0.9 :average_execution_time)
-                                                                       (*    0.1 execution-time-ms))
-                                                                 0))]
+  ^Boolean [query ^bytes query-hash ^Integer execution-time-ms]
+  (let [avg-execution-time (h2x/cast (int-casting-type) (h2x/round (h2x/+ (h2x/* [:inline 0.9] :average_execution_time)
+                                                                          [:inline (* 0.1 execution-time-ms)])
+                                                                   [:inline 0]))]
 
     (or
      ;; if it DOES NOT have a query (yet) set that. In 0.31.0 we added the query.query column, and it gets set for all
      ;; new entries, so at some point in the future we can take this out, and save a DB call.
-     (db/update-where! Query {:query_hash query-hash, :query nil}
-       :query                 (json/generate-string query)
-       :average_execution_time avg-execution-time)
+     (pos? (t2/update! :model/Query
+                       {:query_hash query-hash, :query nil}
+                       {:query                 (json/encode query)
+                        :average_execution_time avg-execution-time}))
      ;; if query is already set then just update average_execution_time. (We're doing this separate call to avoid
      ;; updating query on every single UPDATE)
-     (db/update-where! Query {:query_hash query-hash}
-       :average_execution_time avg-execution-time))))
+     (pos? (t2/update! :model/Query
+                       {:query_hash query-hash}
+                       {:average_execution_time avg-execution-time})))))
 
 (defn- record-new-query-entry!
   "Record a query and its execution time for a `query` with `query-hash` that's not already present in the DB.
   `execution-time-ms` is used as a starting point."
-  [query, ^bytes query-hash, ^Integer execution-time-ms]
-  (db/insert! Query
-    :query                  query
-    :query_hash             query-hash
-    :average_execution_time execution-time-ms))
+  [query ^bytes query-hash ^Integer execution-time-ms]
+  (first (t2/insert-returning-instances! :model/Query
+                                         :query                  query
+                                         :query_hash             query-hash
+                                         :average_execution_time execution-time-ms)))
 
 (defn save-query-and-update-average-execution-time!
   "Update the recorded average execution time (or insert a new record if needed) for `query` with `query-hash`."
@@ -78,26 +90,89 @@
               ;; rethrow e if updating an existing average execution time failed
               (throw e))))))
 
-(defn query->database-and-table-ids
-  "Return a map with `:database-id` and source `:table-id` that should be saved for a Card. Handles queries that use
-   other queries as their source (ones that come in with a `:source-table` like `card__100`, or `:source-query`)
-   recursively, as well as normal queries."
-  [{database-id :database, query-type :type, {:keys [source-table source-query]} :query}]
+(mr/def ::database-and-table-ids
+  [:map
+   [:database-id ::lib.schema.id/database]
+   [:table-id    [:maybe ::lib.schema.id/table]]])
+
+(mu/defn- pmbql-query->database-and-table-ids :- ::database-and-table-ids
+  [{database-id :database, :as query} :- [:map
+                                          [:lib/type [:= :mbql/query]]]]
+  (if-let [source-card-id (lib.util/source-card-id query)]
+    (let [card (lib.metadata/card query source-card-id)]
+      (merge {:table-id nil} (select-keys card [:database-id :table-id])))
+    (let [table-id (lib.util/source-table-id query)]
+      {:database-id database-id
+       :table-id    table-id})))
+
+(mu/defn- legacy-query->database-and-table-ids :- ::database-and-table-ids
+  [{database-id :database, query-type :type, {:keys [source-table source-query]} :query} :- [:map
+                                                                                             [:type [:enum :query :native]]]]
   (cond
     (= :native query-type)  {:database-id database-id, :table-id nil}
     (integer? source-table) {:database-id database-id, :table-id source-table}
     (string? source-table)  (let [[_ card-id] (re-find #"^card__(\d+)$" source-table)]
-                              (db/select-one ['Card [:table_id :table-id] [:database_id :database-id]]
-                                :id (Integer/parseInt card-id)))
-    (map? source-query)     (query->database-and-table-ids {:database database-id
-                                                            :type     query-type
-                                                            :query    source-query})))
+                              (t2/select-one [:model/Card [:table_id :table-id] [:database_id :database-id]]
+                                             :id (Integer/parseInt card-id)))
+    (map? source-query)     (legacy-query->database-and-table-ids {:database database-id
+                                                                   :type     query-type
+                                                                   :query    source-query})))
 
-(defn adhoc-query
-  "Wrap query map into a Query object (mostly to fascilitate type dispatch)."
+(mu/defn query->database-and-table-ids :- [:maybe ::database-and-table-ids]
+  "Return a map with `:database-id` and source `:table-id` that should be saved for a Card.
+
+ Handles either pMBQL (MLv2) queries or legacy MBQL queries. Handles source Cards by fetching them as needed."
+  [query :- [:maybe :map]]
+  (when query
+    (when-let [f (case (lib/normalized-query-type query)
+                   :mbql/query      pmbql-query->database-and-table-ids
+                   (:native :query) legacy-query->database-and-table-ids
+                   nil)]
+      (f (mi/maybe-normalize-query :out query)))))
+
+(defn- parse-source-query-id
+  "Return the ID of the card used as source table, if applicable; otherwise return `nil`."
+  [source-table]
+  (when (string? source-table)
+    (when-let [[_ card-id-str] (re-matches #"card__(\d+)" source-table)]
+      (parse-long card-id-str))))
+
+(defn collect-card-ids
+  "Return a sequence of model ids referenced in the MBQL `query`."
   [query]
-  (->> query
-       normalize/normalize
-       (hash-map :dataset_query)
-       (merge (query->database-and-table-ids query))
-       map->QueryInstance))
+  (let [ids (java.util.HashSet.)
+        walker (fn [form]
+                 (when (map? form)
+                   ;; model references in native queries
+                   (when-let [card-id (:card-id form)]
+                     (when (int? card-id)
+                       (.add ids card-id)))
+                   ;; source tables (possibly in joins)
+                   ;;
+                   ;; MLv2 `:source-card`
+                   (when-let [card-id (:source-card form)]
+                     (.add ids card-id))
+                   ;; legacy MBQL card__<id> `:source-table`
+                   (when-let [card-id (parse-source-query-id (:source-table form))]
+                     (.add ids card-id)))
+                 form)]
+    (walk/prewalk walker query)
+    (seq ids)))
+
+(mu/defn adhoc-query :- (ms/InstanceOf :model/Query)
+  "Wrap query map into a Query object (mostly to facilitate type dispatch)."
+  [query :- :map]
+  (mi/instance :model/Query
+               (merge (query->database-and-table-ids query)
+                      {:dataset_query (mi/maybe-normalize-query :out query)})))
+
+(mu/defn query-is-native? :- :boolean
+  "Whether this query (pMBQL or legacy) has a `:native` first stage. Queries with source Cards are considered to be MBQL
+  regardless of whether the Card has a native query or not."
+  [query :- :map]
+  (case (lib/normalized-query-type query)
+    :query      false
+    :native     true
+    :mbql/query (let [query (mi/maybe-normalize-query :out query)]
+                  (lib.util/first-stage-is-native? query))
+    false))

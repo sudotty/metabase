@@ -1,7 +1,8 @@
-import React from "react";
 import PropTypes from "prop-types";
 import { t } from "ttag";
+
 import NotificationCard from "../NotificationCard";
+
 import {
   NotificationButton,
   NotificationHeader,
@@ -15,6 +16,7 @@ const propTypes = {
   items: PropTypes.array.isRequired,
   user: PropTypes.object.isRequired,
   children: PropTypes.node,
+  canManageSubscriptions: PropTypes.bool,
   onHelp: PropTypes.func,
   onUnsubscribe: PropTypes.func,
   onArchive: PropTypes.func,
@@ -24,6 +26,7 @@ const NotificationList = ({
   items,
   user,
   children,
+  canManageSubscriptions,
   onHelp,
   onUnsubscribe,
   onArchive,
@@ -33,7 +36,7 @@ const NotificationList = ({
   }
 
   return (
-    <div>
+    <div data-testid="notifications-list">
       <NotificationHeader>
         <NotificationLabel>{t`You receive or created these`}</NotificationLabel>
         <NotificationButton onClick={onHelp}>
@@ -46,6 +49,7 @@ const NotificationList = ({
           item={item}
           type={type}
           user={user}
+          isEditable={canManageSubscriptions}
           onUnsubscribe={onUnsubscribe}
           onArchive={onArchive}
         />

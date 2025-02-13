@@ -1,17 +1,17 @@
-import React, { useState } from "react";
 import PropTypes from "prop-types";
+import { useState } from "react";
 
-import Icon from "metabase/components/Icon";
-import Tooltip from "metabase/components/Tooltip";
+import Tooltip from "metabase/core/components/Tooltip";
+import { Icon } from "metabase/ui";
 
 import {
   IconContainer,
-  PermissionsSelectOptionRoot,
   PermissionsSelectLabel,
+  PermissionsSelectOptionRoot,
 } from "./PermissionsSelectOption.styled";
 
 export const optionShape = {
-  label: PropTypes.string.isRequired,
+  label: PropTypes.oneOfType([PropTypes.string, PropTypes.element]).isRequired,
   icon: PropTypes.string.isRequired,
   iconColor: PropTypes.string.isRequired,
 };
@@ -39,7 +39,7 @@ export function PermissionsSelectOption({
     >
       <Tooltip tooltip={hint} isOpen={shouldShowTooltip}>
         <IconContainer color={iconColor}>
-          <Icon name={icon} size={14} />
+          <Icon name={icon} />
         </IconContainer>
       </Tooltip>
       <PermissionsSelectLabel>{label}</PermissionsSelectLabel>

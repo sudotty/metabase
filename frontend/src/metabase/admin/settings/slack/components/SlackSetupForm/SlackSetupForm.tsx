@@ -1,33 +1,20 @@
-import React, { useMemo } from "react";
-import { t } from "ttag";
-import Form from "metabase/containers/Form";
-import { SlackSettings } from "metabase-types/api";
-import { getSlackForm } from "../../forms";
-import { FormProps } from "./types";
-import { FormMessage } from "./SlackSetupForm.styled";
+import type { SlackSettings } from "metabase-types/api";
+
+import SlackForm from "../SlackForm";
+
+const DEFAULT_SETTINGS: SlackSettings = {
+  "slack-app-token": "",
+  "slack-files-channel": "",
+  "slack-bug-report-channel": "",
+};
 
 export interface SlackSetupFormProps {
   onSubmit: (settings: SlackSettings) => void;
 }
 
 const SlackSetupForm = ({ onSubmit }: SlackSetupFormProps): JSX.Element => {
-  const form = useMemo(() => getSlackForm(), []);
-
-  return (
-    <Form form={form} onSubmit={onSubmit}>
-      {({ Form, FormField, FormFooter }: FormProps) => (
-        <Form>
-          <FormField name="slack-app-token" />
-          <FormMessage>
-            {t`Finally, open Slack, create a public channel and enter its name below.`}{" "}
-            {t`We'll upload charts and tables here before sending out dashboard subscriptions.`}
-          </FormMessage>
-          <FormField name="slack-files-channel" />
-          <FormFooter submitTitle={t`Save changes`} />
-        </Form>
-      )}
-    </Form>
-  );
+  return <SlackForm initialValues={DEFAULT_SETTINGS} onSubmit={onSubmit} />;
 };
 
+// eslint-disable-next-line import/no-default-export -- deprecated usage
 export default SlackSetupForm;

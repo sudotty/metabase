@@ -1,7 +1,8 @@
 import styled from "@emotion/styled";
+
 import {
+  breakpointMinLarge,
   breakpointMinSmall,
-  breakpointMinMedium,
 } from "metabase/styled-components/theme";
 
 export const FullWidthContainer = styled.div`
@@ -10,12 +11,12 @@ export const FullWidthContainer = styled.div`
   width: 100%;
 
   ${breakpointMinSmall} {
-    padding-left: 2em;
-    padding-right: 2em;
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
   }
 
-  ${breakpointMinMedium} {
-    padding-left: 3em;
-    padding-right: 3em;
+  ${breakpointMinLarge} {
+    padding-left: 2rem;
+    padding-right: 2rem;
   }
 `;

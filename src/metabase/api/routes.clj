@@ -1,103 +1,209 @@
 (ns metabase.api.routes
-  (:require [compojure.core :refer [context defroutes]]
-            [compojure.route :as route]
-            [metabase.api.activity :as activity]
-            [metabase.api.alert :as alert]
-            [metabase.api.automagic-dashboards :as magic]
-            [metabase.api.card :as card]
-            [metabase.api.collection :as collection]
-            [metabase.api.dashboard :as dashboard]
-            [metabase.api.database :as database]
-            [metabase.api.dataset :as dataset]
-            [metabase.api.email :as email]
-            [metabase.api.embed :as embed]
-            [metabase.api.field :as field]
-            [metabase.api.geojson :as geojson]
-            [metabase.api.ldap :as ldap]
-            [metabase.api.login-history :as login-history]
-            [metabase.api.metric :as metric]
-            [metabase.api.native-query-snippet :as native-query-snippet]
-            [metabase.api.notify :as notify]
-            [metabase.api.permissions :as permissions]
-            [metabase.api.premium-features :as premium-features]
-            [metabase.api.preview-embed :as preview-embed]
-            [metabase.api.public :as public]
-            [metabase.api.pulse :as pulse]
-            [metabase.api.revision :as revision]
-            [metabase.api.routes.common :refer [+apikey +auth +generic-exceptions +message-only-exceptions]]
-            [metabase.api.search :as search]
-            [metabase.api.segment :as segment]
-            [metabase.api.session :as session]
-            [metabase.api.setting :as setting]
-            [metabase.api.setup :as setup]
-            [metabase.api.slack :as slack]
-            [metabase.api.table :as table]
-            [metabase.api.task :as task]
-            [metabase.api.testing :as testing]
-            [metabase.api.tiles :as tiles]
-            [metabase.api.timeline :as timeline]
-            [metabase.api.timeline-event :as timeline-event]
-            [metabase.api.transform :as transform]
-            [metabase.api.user :as user]
-            [metabase.api.util :as util]
-            [metabase.config :as config]
-            [metabase.plugins.classloader :as classloader]
-            [metabase.util :as u]
-            [metabase.util.i18n :refer [deferred-tru]]))
+  (:require
+   [compojure.route :as route]
+   [metabase.actions.api]
+   [metabase.activity-feed.api]
+   ^{:clj-kondo/ignore [:deprecated-namespace]}
+   [metabase.api.alert]
+   [metabase.api.api-key]
+   [metabase.api.cache]
+   [metabase.api.card]
+   [metabase.api.cards]
+   [metabase.api.cloud-migration]
+   [metabase.api.collection]
+   [metabase.api.dashboard]
+   [metabase.api.database]
+   [metabase.api.dataset]
+   [metabase.api.docs]
+   [metabase.api.embed]
+   [metabase.api.field]
+   [metabase.api.geojson]
+   [metabase.api.google]
+   [metabase.api.ldap]
+   [metabase.api.login-history]
+   [metabase.api.macros :as api.macros]
+   [metabase.api.native-query-snippet]
+   [metabase.api.open-api :as open-api]
+   [metabase.api.persist]
+   [metabase.api.premium-features]
+   [metabase.api.preview-embed]
+   [metabase.api.public]
+   ^{:clj-kondo/ignore [:deprecated-namespace]}
+   [metabase.api.pulse]
+   [metabase.api.pulse.unsubscribe]
+   [metabase.api.routes.common :as routes.common :refer [+static-apikey]]
+   [metabase.api.session]
+   [metabase.api.setting]
+   [metabase.api.slack]
+   [metabase.api.table]
+   [metabase.api.task]
+   [metabase.api.testing]
+   [metabase.api.tiles]
+   [metabase.api.user]
+   [metabase.api.util]
+   [metabase.api.util.handlers :as handlers]
+   [metabase.bookmarks.api]
+   [metabase.channel.api]
+   [metabase.config :as config]
+   [metabase.indexed-entities.api]
+   [metabase.permissions.api]
+   [metabase.revisions.api]
+   [metabase.search.api]
+   [metabase.segments.api]
+   [metabase.setup.api]
+   [metabase.sync.api]
+   [metabase.timeline.api]
+   [metabase.user-key-value.api]
+   [metabase.util.i18n :refer [deferred-tru]]
+   [metabase.xrays.api]))
 
-(u/ignore-exceptions (classloader/require 'metabase-enterprise.api.routes))
+(comment metabase.actions.api/keep-me
+         metabase.activity-feed.api/keep-me
+         metabase.api.alert/keep-me
+         metabase.api.api-key/keep-me
+         metabase.api.cache/keep-me
+         metabase.api.card/keep-me
+         metabase.api.cards/keep-me
+         metabase.api.cloud-migration/keep-me
+         metabase.api.collection/keep-me
+         metabase.api.dashboard/keep-me
+         metabase.api.database/keep-me
+         metabase.api.dataset/keep-me
+         metabase.api.embed/keep-me
+         metabase.api.field/keep-me
+         metabase.api.geojson/keep-me
+         metabase.api.google/keep-me
+         metabase.api.ldap/keep-me
+         metabase.api.login-history/keep-me
+         metabase.api.native-query-snippet/keep-me
+         metabase.api.persist/keep-me
+         metabase.api.preview-embed/keep-me
+         metabase.api.public/keep-me
+         metabase.api.pulse.unsubscribe/keep-me
+         metabase.segments.api/keep-me
+         metabase.api.setting/keep-me
+         metabase.api.slack/keep-me
+         metabase.api.table/keep-me
+         metabase.api.task/keep-me
+         metabase.api.testing/keep-me
+         metabase.api.tiles/keep-me
+         metabase.api.user/keep-me
+         metabase.api.util/keep-me
+         metabase.bookmarks.api/keep-me
+         metabase.indexed-entities.api/keep-me
+         metabase.permissions.api/keep-me
+         metabase.revisions.api/keep-me
+         metabase.setup.api/keep-me
+         metabase.user-key-value.api/keep-me)
 
-;; EE routes defined in [[metabase-enterprise.api.routes/routes]] always get the first chance to handle a request, if
-;; they exist. If they don't exist, this handler returns `nil` which means Compojure will try the next handler.
-(def ^:private ^{:arglists '([request respond raise])} ee-routes
-  ;; resolve the var for every request so we pick up any changes to it in interactive development
-  (if-let [ee-handler-var (resolve 'metabase-enterprise.api.routes/routes)]
-    (fn [request respond raise]
-      ((var-get ee-handler-var) request respond raise))
-    (fn [_request respond _raise]
-      (respond nil))))
+(def ^:private ^{:arglists '([request respond raise])} pass-thru-handler
+  "Always 'falls thru' to the next handler."
+  (open-api/handler-with-open-api-spec
+   (fn [_request respond _raise]
+     (respond nil))
+   ;; no OpenAPI spec for this handler.
+   (fn [_prefix]
+     nil)))
 
-(defroutes ^{:doc "Ring routes for API endpoints."} routes
-  ee-routes
-  (context "/activity"             [] (+auth activity/routes))
-  (context "/alert"                [] (+auth alert/routes))
-  (context "/automagic-dashboards" [] (+auth magic/routes))
-  (context "/card"                 [] (+auth card/routes))
-  (context "/collection"           [] (+auth collection/routes))
-  (context "/dashboard"            [] (+auth dashboard/routes))
-  (context "/database"             [] (+auth database/routes))
-  (context "/dataset"              [] (+auth dataset/routes))
-  (context "/email"                [] (+auth email/routes))
-  (context "/embed"                [] (+message-only-exceptions embed/routes))
-  (context "/field"                [] (+auth field/routes))
-  (context "/geojson"              [] geojson/routes)
-  (context "/ldap"                 [] (+auth ldap/routes))
-  (context "/login-history"        [] (+auth login-history/routes))
-  (context "/premium-features"     [] (+auth premium-features/routes))
-  (context "/metric"               [] (+auth metric/routes))
-  (context "/native-query-snippet" [] (+auth native-query-snippet/routes))
-  (context "/notify"               [] (+apikey notify/routes))
-  (context "/permissions"          [] (+auth permissions/routes))
-  (context "/preview_embed"        [] (+auth preview-embed/routes))
-  (context "/public"               [] (+generic-exceptions public/routes))
-  (context "/pulse"                [] (+auth pulse/routes))
-  (context "/revision"             [] (+auth revision/routes))
-  (context "/search"               [] (+auth search/routes))
-  (context "/segment"              [] (+auth segment/routes))
-  (context "/session"              [] session/routes)
-  (context "/setting"              [] (+auth setting/routes))
-  (context "/setup"                [] setup/routes)
-  (context "/slack"                [] (+auth slack/routes))
-  (context "/table"                [] (+auth table/routes))
-  (context "/task"                 [] (+auth task/routes))
-  (context "/testing"              [] (if (or (not config/is-prod?)
-                                              (config/config-bool :mb-enable-test-endpoints))
-                                        testing/routes
-                                        (fn [_ respond _] (respond nil))))
-  (context "/tiles"                [] (+auth tiles/routes))
-  (context "/timeline"             [] (+auth timeline/routes))
-  (context "/timeline-event"       [] (+auth timeline-event/routes))
-  (context "/transform"            [] (+auth transform/routes))
-  (context "/user"                 [] (+auth user/routes))
-  (context "/util"                 [] util/routes)
-  (route/not-found (constantly {:status 404, :body (deferred-tru "API endpoint does not exist.")})))
+(def ^:private ^{:arglists '([request respond raise])} not-found-handler
+  "Always returns a 404."
+  (open-api/handler-with-open-api-spec
+   (route/not-found (constantly {:status 404, :body (deferred-tru "API endpoint does not exist.")}))
+   ;; no OpenAPI spec for this handler.
+   (fn [_prefix]
+     nil)))
+
+(def ^:private enable-testing-routes?
+  (or (not config/is-prod?)
+      (config/config-bool :mb-enable-test-endpoints)))
+
+(defn- ->handler [x]
+  (cond-> x
+    (simple-symbol? x) api.macros/ns-handler))
+
+(defn- +auth                    [handler] (routes.common/+auth                    (->handler handler)))
+(defn- +message-only-exceptions [handler] (routes.common/+message-only-exceptions (->handler handler)))
+(defn- +public-exceptions       [handler] (routes.common/+public-exceptions       (->handler handler)))
+
+(def ^:private ^{:arglists '([request respond raise])} pulse-routes
+  (handlers/routes
+   (handlers/route-map-handler
+    {"/unsubscribe" 'metabase.api.pulse.unsubscribe})
+   (+auth metabase.api.pulse/routes)))
+
+;;; !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+;;; !!                                                                                                !!
+;;; !!                  DO NOT ADD `metabase.api.*` NAMESPACES THAT CONTAIN ENDPOINTS                 !!
+;;; !!                                                                                                !!
+;;; !!   Please read https://metaboat.slack.com/archives/CKZEMT1MJ/p1738972144181069 for more info    !!
+;;; !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+;;; ↓↓↓ KEEP THIS SORTED OR ELSE! ↓↓↓
+(def ^:private route-map
+  {"/action"               (+auth 'metabase.actions.api)
+   "/activity"             (+auth 'metabase.activity-feed.api)
+   "/alert"                (+auth 'metabase.api.alert)
+   "/api-key"              (+auth 'metabase.api.api-key)
+   "/automagic-dashboards" (+auth metabase.xrays.api/automagic-dashboards-routes)
+   "/bookmark"             (+auth 'metabase.bookmarks.api)
+   "/cache"                (+auth 'metabase.api.cache)
+   "/card"                 (+auth 'metabase.api.card)
+   "/cards"                (+auth 'metabase.api.cards)
+   "/channel"              (+auth metabase.channel.api/channel-routes)
+   "/cloud-migration"      (+auth 'metabase.api.cloud-migration)
+   "/collection"           (+auth 'metabase.api.collection)
+   "/dashboard"            (+auth 'metabase.api.dashboard)
+   "/database"             (+auth 'metabase.api.database)
+   "/dataset"              'metabase.api.dataset
+   "/docs"                 metabase.api.docs/routes
+   "/email"                metabase.channel.api/email-routes
+   "/embed"                (+message-only-exceptions 'metabase.api.embed)
+   "/field"                (+auth 'metabase.api.field)
+   "/geojson"              'metabase.api.geojson
+   "/google"               (+auth 'metabase.api.google)
+   "/ldap"                 (+auth 'metabase.api.ldap)
+   "/login-history"        (+auth 'metabase.api.login-history)
+   "/model-index"          (+auth 'metabase.indexed-entities.api)
+   "/native-query-snippet" (+auth 'metabase.api.native-query-snippet)
+   "/notify"               (+static-apikey metabase.sync.api/notify-routes)
+   "/permissions"          (+auth 'metabase.permissions.api)
+   "/persist"              (+auth 'metabase.api.persist)
+   "/premium-features"     (+auth metabase.api.premium-features/routes)
+   "/preview_embed"        (+auth 'metabase.api.preview-embed)
+   "/public"               (+public-exceptions 'metabase.api.public)
+   "/pulse"                pulse-routes
+   "/revision"             (+auth 'metabase.revisions.api)
+   "/search"               (+auth metabase.search.api/routes)
+   "/segment"              (+auth 'metabase.segments.api)
+   "/session"              metabase.api.session/routes
+   "/setting"              (+auth 'metabase.api.setting)
+   "/setup"                'metabase.setup.api
+   "/slack"                (+auth 'metabase.api.slack)
+   "/table"                (+auth 'metabase.api.table)
+   "/task"                 (+auth 'metabase.api.task)
+   "/testing"              (if enable-testing-routes? 'metabase.api.testing pass-thru-handler)
+   "/tiles"                (+auth 'metabase.api.tiles)
+   "/timeline"             (+auth metabase.timeline.api/timeline-routes)
+   "/timeline-event"       (+auth metabase.timeline.api/timeline-event-routes)
+   "/user"                 (+auth 'metabase.api.user)
+   "/user-key-value"       (+auth 'metabase.user-key-value.api)
+   "/util"                 'metabase.api.util})
+;;; ↑↑↑ KEEP THIS SORTED OR ELSE ↑↑↑
+
+;;; !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+;;; !!                                                                                                !!
+;;; !!                  DO NOT ADD `metabase.api.*` NAMESPACES THAT CONTAIN ENDPOINTS                 !!
+;;; !!                                                                                                !!
+;;; !!   Please read https://metaboat.slack.com/archives/CKZEMT1MJ/p1738972144181069 for more info    !!
+;;; !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+(def ^{:arglists '([request respond raise])} routes
+  "Ring routes for API endpoints."
+  ;; EE routes defined in [[metabase-enterprise.api.routes/routes]] always get the first chance to handle a request, if
+  ;; they exist. If they don't exist, this handler returns `nil` which means we will try the next handler.
+  (handlers/routes
+   (if (and config/ee-available? (not *compile-files*))
+     (requiring-resolve 'metabase-enterprise.api.routes/routes)
+     pass-thru-handler)
+   (handlers/route-map-handler route-map)
+   not-found-handler))

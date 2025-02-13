@@ -1,52 +1,43 @@
-import React from "react";
 import { t } from "ttag";
-import { getIn } from "icepick";
-import Users from "metabase/entities/users";
-import ActiveStep from "../ActiveStep";
-import InactiveStep from "../InvactiveStep";
-import {
-  UserFormRoot,
-  UserFormGroup,
-  StepDescription,
-} from "./UserStep.styled";
-import { FormProps } from "./types";
-import { UserInfo } from "../../types";
 
-export interface UserStepProps {
-  user?: UserInfo;
-  isHosted: boolean;
-  isStepActive: boolean;
-  isStepCompleted: boolean;
-  isSetupCompleted: boolean;
-  onPasswordChange: (user: UserInfo) => void;
-  onStepSelect: () => void;
-  onStepSubmit: (user: UserInfo) => void;
-}
+import { useDispatch, useSelector } from "metabase/lib/redux";
+import type { UserInfo } from "metabase-types/store";
 
-const UserStep = ({
-  user,
-  isHosted,
-  isStepActive,
-  isStepCompleted,
-  isSetupCompleted,
-  onPasswordChange,
-  onStepSelect,
-  onStepSubmit,
-}: UserStepProps): JSX.Element => {
+import { submitUser } from "../../actions";
+import { getIsHosted, getUser } from "../../selectors";
+import { useStep } from "../../useStep";
+import { validatePassword } from "../../utils";
+import { ActiveStep } from "../ActiveStep";
+import { InactiveStep } from "../InactiveStep";
+import { UserForm } from "../UserForm";
+import type { NumberedStepProps } from "../types";
+
+import { StepDescription } from "./UserStep.styled";
+
+export const UserStep = ({ stepLabel }: NumberedStepProps): JSX.Element => {
+  const { isStepActive, isStepCompleted } = useStep("user_info");
+
+  const user = useSelector(getUser);
+  const isHosted = useSelector(getIsHosted);
+
+  const dispatch = useDispatch();
+
+  const handleSubmit = async (user: UserInfo) => {
+    await dispatch(submitUser(user)).unwrap();
+  };
+
   if (!isStepActive) {
     return (
       <InactiveStep
         title={getStepTitle(user, isStepCompleted)}
-        label={2}
+        label={stepLabel}
         isStepCompleted={isStepCompleted}
-        isSetupCompleted={isSetupCompleted}
-        onStepSelect={onStepSelect}
       />
     );
   }
 
   return (
-    <ActiveStep title={getStepTitle(user, isStepCompleted)} label={2}>
+    <ActiveStep title={getStepTitle(user, isStepCompleted)} label={stepLabel}>
       {isHosted && (
         <StepDescription>
           {t`We know you’ve already created one of these.`}{" "}
@@ -55,62 +46,17 @@ const UserStep = ({
       )}
       <UserForm
         user={user}
-        onSubmit={onStepSubmit}
-        onPasswordChange={onPasswordChange}
+        isHosted={isHosted}
+        onValidatePassword={validatePassword}
+        onSubmit={handleSubmit}
       />
     </ActiveStep>
   );
 };
 
-interface UserFormProps {
-  user?: UserInfo;
-  onSubmit: (user: UserInfo) => void;
-  onPasswordChange: (user: UserInfo) => void;
-}
-
-const UserForm = ({ user, onSubmit, onPasswordChange }: UserFormProps) => {
-  const handleAsyncValidate = async (user: UserInfo) => {
-    try {
-      await onPasswordChange(user);
-      return {};
-    } catch (error) {
-      return getSubmitError(error);
-    }
-  };
-
-  return (
-    <UserFormRoot
-      form={Users.forms.setup}
-      user={user}
-      asyncValidate={handleAsyncValidate}
-      asyncBlurFields={["password"]}
-      onSubmit={onSubmit}
-    >
-      {({ Form, FormField, FormFooter }: FormProps) => (
-        <Form>
-          <UserFormGroup>
-            <FormField name="first_name" />
-            <FormField name="last_name" />
-          </UserFormGroup>
-          <FormField name="email" />
-          <FormField name="site_name" />
-          <FormField name="password" />
-          <FormField name="password_confirm" />
-          <FormFooter submitTitle={t`Next`} />
-        </Form>
-      )}
-    </UserFormRoot>
-  );
-};
-
 const getStepTitle = (user: UserInfo | undefined, isStepCompleted: boolean) => {
+  const namePart = user?.first_name ? `, ${user.first_name}` : "";
   return isStepCompleted
-    ? t`Hi, ${user?.first_name}. Nice to meet you!`
+    ? t`Hi${namePart}. Nice to meet you!`
     : t`What should we call you?`;
 };
-
-const getSubmitError = (error: unknown) => {
-  return getIn(error, ["data", "errors"]);
-};
-
-export default UserStep;

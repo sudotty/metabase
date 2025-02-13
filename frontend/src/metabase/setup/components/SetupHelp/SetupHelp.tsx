@@ -1,21 +1,24 @@
-import React from "react";
 import { t } from "ttag";
-import MetabaseSettings from "metabase/lib/settings";
+
+import { useDocsUrl } from "metabase/common/hooks";
 import ExternalLink from "metabase/core/components/ExternalLink";
+import CS from "metabase/css/core/index.css";
+
 import { SetupFooterRoot } from "./SetupHelp.styled";
 
-const SetupHelp = (): JSX.Element => {
+export const SetupHelp = (): JSX.Element => {
+  const { url: docsUrl } = useDocsUrl(
+    "configuring-metabase/setting-up-metabase",
+  );
   return (
     <SetupFooterRoot>
       {t`If you feel stuck`},{" "}
       <ExternalLink
-        className="link"
-        href={MetabaseSettings.docsUrl("setting-up-metabase")}
+        className={CS.link}
+        href={docsUrl}
         target="_blank"
       >{t`our getting started guide`}</ExternalLink>{" "}
       {t`is just a click away.`}
     </SetupFooterRoot>
   );
 };
-
-export default SetupHelp;

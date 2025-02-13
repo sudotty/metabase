@@ -1,3 +1,7 @@
+---
+title: My linked filters don't work
+---
+
 # My linked filters don't work
 
 You have created a [linked filter][linked-filter-gloss] so that (for example) if a dashboard contains both a "State" and a "City" filter, the "City" filter only shows cities in the state selected by the "State" filter. However:
@@ -6,7 +10,17 @@ You have created a [linked filter][linked-filter-gloss] so that (for example) if
 - your linked filter seems to have no effect, or
 - your linked filter widget does not display a dropdown of filtered values.
 
-If you are having problems with a regular [filter widget][filter-widget-gloss], please see [this guide](./filters.html). In order to fix problems with linked filters, you need a clear understanding of how they work:
+If you are having problems with a regular [filter widget][filter-widget-gloss], please see [this guide](./filters.md). In order to fix problems with linked filters, you need a clear understanding of how they work:
+
+## Does a connected dashboard card use a SQL variable?
+
+**Root cause**: Native/SQL questions must have a [field filter](../questions/native-editor/sql-parameters.md#the-field-filter-variable-type) variable in order to be linked. Regular SQL variables won't work.
+
+**Steps to take**:
+
+1. Update the card's query to change the regular variable to a [field filter](../questions/native-editor/sql-parameters.md#the-field-filter-variable-type) variable.
+
+See [Limitations of linking filters](../dashboards/linked-filters.md#limitations-of-linked-filters).
 
 ## Do you understand the directionality of linked filters?
 
@@ -18,7 +32,7 @@ If you are having problems with a regular [filter widget][filter-widget-gloss], 
 
 2. In order for Metabase to display a dropdown list of possible filter values, it must know that the column corresponds to a category. This happens automatically if the question is created from tables via the Notebook Editor, since Metabase has knowledge about the table and columns from synchronization.
 
-3. If the question that contains the variable is written in SQL, on the other hand, the author of the question must have selected "Field Filter". Also, the field referenced must be set as a category in the Data Model in order for Metabase to show a dropdown list of values.
+3. If the question that contains the variable is written in SQL, on the other hand, the author of the question must have selected "Field Filter". Also, the field referenced must be set as a category in the Table Metadata in order for Metabase to show a dropdown list of values.
 
 ## Are the filters linked in the correct direction?
 
@@ -51,10 +65,10 @@ If you are having problems with a regular [filter widget][filter-widget-gloss], 
 
 **Steps to take:**
 
-1. Check that Metabase's data model for your database includes the foreign key relationship.
+1. Check that Metabase's table metadata for your database includes the foreign key relationship.
 
-[filter-widget-gloss]: /glossary.html#filter_widget
-[foreign-key-gloss]: /glossary.html#foreign_key
-[join-types]: /learn/sql-questions/sql-join-types.html
-[learn-linking]: /learn/dashboards/linking-filters.html
-[linked-filter-gloss]: /glossary.html#linked_filter
+[filter-widget-gloss]: https://www.metabase.com/glossary/filter_widget
+[foreign-key-gloss]: https://www.metabase.com/glossary/foreign_key
+[join-types]: https://www.metabase.com/learn/grow-your-data-skills/learn-sql/working-with-sql/sql-join-types
+[learn-linking]: https://www.metabase.com/learn/metabase-basics/querying-and-dashboards/dashboards/linking-filters.html
+[linked-filter-gloss]: https://www.metabase.com/glossary/linked_filter

@@ -1,26 +1,34 @@
 (ns metabase.sync.field-values
-  "Logic for updating cached FieldValues for fields in a database."
-  (:require [clojure.tools.logging :as log]
-            [metabase.models.field :refer [Field]]
-            [metabase.models.field-values :as field-values :refer [FieldValues]]
-            [metabase.sync.interface :as i]
-            [metabase.sync.util :as sync-util]
-            [metabase.util :as u]
-            [metabase.util.i18n :refer [trs]]
-            [schema.core :as s]
-            [toucan.db :as db]))
+  "Logic for updating FieldValues for fields in a database."
+  (:require
+   [java-time.api :as t]
+   [metabase.db :as mdb]
+   [metabase.driver.sql.query-processor :as sql.qp]
+   [metabase.models.field-values :as field-values]
+   [metabase.sync.interface :as i]
+   [metabase.sync.util :as sync-util]
+   [metabase.util :as u]
+   [metabase.util.log :as log]
+   [metabase.util.malli :as mu]
+   [toucan2.core :as t2]))
 
-(s/defn ^:private clear-field-values-for-field! [field :- i/FieldInstance]
-  (when (db/exists? FieldValues :field_id (u/the-id field))
+(mu/defn- clear-field-values-for-field!
+  [field :- i/FieldInstance]
+  (when (t2/exists? :model/FieldValues :field_id (u/the-id field))
     (log/debug (format "Based on cardinality and/or type information, %s should no longer have field values.\n"
                        (sync-util/name-for-logging field))
                "Deleting FieldValues...")
-    (db/delete! FieldValues :field_id (u/the-id field))
+    (field-values/clear-field-values-for-field! field)
     ::field-values/fv-deleted))
 
-(s/defn ^:private update-field-values-for-field! [field :- i/FieldInstance]
+(mu/defn- update-field-values-for-field!
+  [field :- i/FieldInstance]
   (log/debug (u/format-color 'green "Looking into updating FieldValues for %s" (sync-util/name-for-logging field)))
-  (field-values/create-or-update-field-values! field))
+  (let [field-values (field-values/get-latest-full-field-values (u/the-id field))]
+    (if (field-values/inactive? field-values)
+      (log/debugf "Field %s has not been used since %s. Skipping..."
+                  (sync-util/name-for-logging field) (t/format "yyyy-MM-dd" (t/local-date-time (:last_used_at field-values))))
+      (field-values/create-or-update-full-field-values! field :field-values field-values))))
 
 (defn- update-field-value-stats-count [counts-map result]
   (if (instance? Exception result)
@@ -35,8 +43,12 @@
 
       counts-map)))
 
-(s/defn update-field-values-for-table!
-  "Update the cached FieldValues for all Fields (as needed) for TABLE."
+(defn- table->fields-to-scan
+  [table]
+  (t2/select :model/Field :table_id (u/the-id table), :active true, :visibility_type "normal"))
+
+(mu/defn update-field-values-for-table!
+  "Update the FieldValues for all Fields (as needed) for `table`."
   [table :- i/TableInstance]
   (reduce (fn [fv-change-counts field]
             (let [result (sync-util/with-error-handling (format "Error updating field values for %s" (sync-util/name-for-logging field))
@@ -45,23 +57,66 @@
                              (clear-field-values-for-field! field)))]
               (update-field-value-stats-count fv-change-counts result)))
           {:errors 0, :created 0, :updated 0, :deleted 0}
-          (db/select Field :table_id (u/the-id table), :active true, :visibility_type "normal")))
+          (table->fields-to-scan table)))
 
-(s/defn ^:private update-field-values-for-database!
+(mu/defn- update-field-values-for-database!
   [database :- i/DatabaseInstance]
-  (apply merge-with + (map update-field-values-for-table! (sync-util/db->sync-tables database))))
+  (let [tables (sync-util/reducible-sync-tables database)]
+    (transduce (map update-field-values-for-table!) (partial merge-with +) tables)))
 
 (defn- update-field-values-summary [{:keys [created updated deleted errors]}]
-  (trs "Updated {0} field value sets, created {1}, deleted {2} with {3} errors"
-       updated created deleted errors))
+  (format "Updated %d field value sets, created %d, deleted %d with %d errors"
+          updated created deleted errors))
 
-(def ^:private field-values-steps
-  [(sync-util/create-sync-step "update-field-values" update-field-values-for-database! update-field-values-summary)])
+(defn- delete-expired-advanced-field-values-summary [{:keys [deleted]}]
+  (format "Deleted %d expired advanced fieldvalues" deleted))
 
-(s/defn update-field-values!
-  "Update the cached FieldValues (distinct values for categories and certain other fields that are shown
-   in widgets like filters) for the Tables in DATABASE (as needed)."
+(defn- delete-expired-advanced-field-values-for-field!
+  [field]
+  (sync-util/with-error-handling (format "Error deleting expired advanced field values for %s" (sync-util/name-for-logging field))
+    (let [conditions [:field_id   (:id field)
+                      :type       [:in field-values/advanced-field-values-types]
+                      :created_at [:< (sql.qp/add-interval-honeysql-form
+                                       (mdb/db-type)
+                                       :%now
+                                       (- (t/as field-values/advanced-field-values-max-age :days))
+                                       :day)]]
+          rows-count (apply t2/count :model/FieldValues conditions)]
+      (apply t2/delete! :model/FieldValues conditions)
+      rows-count)))
+
+(mu/defn delete-expired-advanced-field-values-for-table!
+  "Delete all expired advanced FieldValues for a table and returns the number of deleted rows.
+  For more info about advanced FieldValues, check the docs in [[metabase.models.field-values/field-values-types]]"
+  [table :- i/TableInstance]
+  (->> (table->fields-to-scan table)
+       (map delete-expired-advanced-field-values-for-field!)
+       (reduce +)))
+
+(mu/defn- delete-expired-advanced-field-values-for-database!
+  [database :- i/DatabaseInstance]
+  (let [tables (sync-util/reducible-sync-tables database)]
+    {:deleted (transduce (comp (map delete-expired-advanced-field-values-for-table!)
+                               (map (fn [result]
+                                      (if (instance? Throwable result)
+                                        (throw result)
+                                        result))))
+                         +
+                         0
+                         tables)}))
+
+(def ^:private sync-field-values-steps
+  [(sync-util/create-sync-step "delete-expired-advanced-field-values"
+                               delete-expired-advanced-field-values-for-database!
+                               delete-expired-advanced-field-values-summary)
+   (sync-util/create-sync-step "update-field-values"
+                               update-field-values-for-database!
+                               update-field-values-summary)])
+
+(mu/defn update-field-values!
+  "Update the advanced FieldValues (distinct values for categories and certain other fields that are shown
+   in widgets like filters) for the Tables in `database` (as needed)."
   [database :- i/DatabaseInstance]
   (sync-util/sync-operation :cache-field-values database (format "Cache field values in %s"
                                                                  (sync-util/name-for-logging database))
-    (sync-util/run-sync-operation "field values scanning" database field-values-steps)))
+    (sync-util/run-sync-operation "field values scanning" database sync-field-values-steps)))

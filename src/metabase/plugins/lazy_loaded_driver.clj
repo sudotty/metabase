@@ -6,13 +6,19 @@
 
   See https://github.com/metabase/metabase/wiki/Metabase-Plugin-Manifest-Reference for all the options allowed for a
   plugin manifest."
-  (:require [clojure.tools.logging :as log]
-            [metabase.driver :as driver]
-            [metabase.driver.common :as driver.common]
-            [metabase.plugins.init-steps :as init-steps]
-            [metabase.util :as u]
-            [metabase.util.i18n :refer [trs]])
-  (:import clojure.lang.MultiFn))
+  (:require
+   [clojure.java.io :as io]
+   [metabase.driver :as driver]
+   [metabase.driver.common :as driver.common]
+   [metabase.plugins.init-steps :as init-steps]
+   [metabase.util :as u]
+   [metabase.util.i18n :refer [trs]]
+   [metabase.util.log :as log]
+   [metabase.util.yaml :as yaml])
+  (:import
+   (clojure.lang MultiFn)))
+
+(set! *warn-on-reflection* true)
 
 (defn- parse-connection-property [prop]
   (cond
@@ -25,7 +31,7 @@
     (throw (Exception. (trs "Invalid connection property {0}: not a string or map." prop)))
 
     (:merge prop)
-    (reduce merge (map parse-connection-property (:merge prop)))
+    (into {} (map parse-connection-property) (:merge prop))
 
     :else
     prop))
@@ -61,6 +67,7 @@
   "Register a basic shell of a Metabase driver using the information from its Metabase plugin"
   [{:keys                                                                                            [add-to-classpath!]
     init-steps                                                                                       :init
+    contact-info                                                                                     :contact-info
     superseded-by                                                                                    :superseded-by
     {driver-name :name, :keys [abstract display-name parent], :or {abstract false}, :as driver-info} :driver}]
   {:pre [(map? driver-info)]}
@@ -69,21 +76,34 @@
     ;; Make sure the driver has required properties like driver-name
     (when-not (seq driver-name)
       (throw (ex-info (trs "Cannot initialize plugin: missing required property `driver-name`")
-               driver-info)))
+                      driver-info)))
     ;; if someone forgot to include connection properties for a non-abstract driver throw them a bone and warn them
     ;; about it
     (when (and (not abstract)
                (empty? connection-props))
-      (log/warn
-       (u/format-color 'red (trs "Warning: plugin manifest for {0} does not include connection properties" driver))))
+      (log/warn (u/format-color :red "Warning: plugin manifest for %s does not include connection properties" driver)))
     ;; ok, now add implementations for the so-called "non-trivial" driver multimethods
     (doseq [[^MultiFn multifn, f]
             {driver/initialize!           (make-initialize! driver add-to-classpath! init-steps)
              driver/display-name          (when display-name (constantly display-name))
+             driver/contact-info          (constantly contact-info)
              driver/connection-properties (constantly connection-props)
              driver/superseded-by         (constantly (keyword superseded-by))}]
       (when f
         (.addMethod multifn driver f)))
     ;; finally, register the Metabase driver
-    (log/debug (u/format-color 'magenta (trs "Registering lazy loading driver {0}..." driver)))
+    (log/debug (u/format-color :magenta "Registering lazy loading driver %s..." driver))
     (driver/register! driver, :parent (set (map keyword (u/one-or-many parent))), :abstract? abstract)))
+
+(defn- load-connection-properties
+  [driver]
+  (let [manifest (str (io/file "modules/drivers/" (name driver) "resources/metabase-plugin.yaml"))
+        properties (some->
+                    (slurp manifest)
+                    yaml/parse-string
+                    :driver
+                    (parse-connection-properties))]
+    (.addMethod ^MultiFn driver/connection-properties driver (constantly properties))))
+
+(comment
+  (load-connection-properties :snowflake))

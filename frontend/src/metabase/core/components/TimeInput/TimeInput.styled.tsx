@@ -1,8 +1,9 @@
 import styled from "@emotion/styled";
-import { color } from "metabase/lib/colors";
-import NumericInput from "metabase/core/components/NumericInput";
-import Icon from "metabase/components/Icon";
+
 import IconButtonWrapper from "metabase/components/IconButtonWrapper";
+import NumericInput from "metabase/core/components/NumericInput";
+import { color } from "metabase/lib/colors";
+import { Icon } from "metabase/ui";
 
 export const InputRoot = styled.div`
   display: flex;
@@ -15,12 +16,28 @@ export const InputField = styled(NumericInput)`
 `;
 
 export const InputDivider = styled.div`
-  color: ${color("text-dark")};
+  color: var(--mb-color-text-dark);
   margin: 0 0.5rem;
 `;
 
 export const InputClearIcon = styled(Icon)`
-  color: ${color("text-light")};
+  color: var(--mb-color-text-light);
+`;
+
+interface InputPeriodButtonProps {
+  isSelected?: boolean;
+}
+
+export const InputMeridiemContainer = styled.div`
+  display: flex;
+  gap: 0.5rem;
+  margin-left: 0.5rem;
+`;
+
+export const InputMeridiemButton = styled.button<InputPeriodButtonProps>`
+  color: ${props => (props.isSelected ? color("brand") : color("text-light"))};
+  cursor: ${props => (props.isSelected ? "" : "pointer")};
+  font-weight: ${props => (props.isSelected ? "bold" : "")};
 `;
 
 export const InputClearButton = styled(IconButtonWrapper)`

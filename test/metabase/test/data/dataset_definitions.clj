@@ -1,11 +1,12 @@
 (ns metabase.test.data.dataset-definitions
   "Definitions of various datasets for use in tests with `data/dataset` and the like."
-  (:require [java-time :as t]
-            [medley.core :as m]
-            [metabase.test.data.interface :as tx]
-            [metabase.util.date-2 :as u.date])
-  (:import java.sql.Time
-           [java.time LocalDate LocalDateTime LocalTime OffsetDateTime OffsetTime ZonedDateTime]))
+  (:require
+   [java-time.api :as t]
+   [medley.core :as m]
+   [metabase.test.data.interface :as tx]
+   [metabase.util.date-2 :as u.date])
+  (:import
+   (java.time LocalDate LocalDateTime LocalTime OffsetDateTime OffsetTime ZonedDateTime)))
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
 ;;; |                                                Various Datasets                                                |
@@ -35,12 +36,18 @@
   "A small dataset with users and a set of messages between them. Each message has *2* foreign keys to user -- sender
   and receiver -- allowing us to test situations where multiple joins for a *single* table should occur.")
 
+(tx/defdataset-edn uuid-dogs
+  "A small dataset with users and dogs, with uuid primary keys")
+
 (tx/defdataset-edn daily-bird-counts
   "A small dataset that includes an integer column with some NULL and ZERO values, meant for testing things like
   expressions to make sure they behave correctly.
 
   As an added bonus this dataset has a table with a name in a slash in it, so the driver will need to support that
   correctly in order for this to work!")
+
+(tx/defdataset-edn crazy-names
+  "A small dataset with a table and column both with spaces in their names")
 
 (tx/defdataset-edn office-checkins
   "A small dataset that includes TIMESTAMP dates. People who stopped by the Metabase office and the time they did so.")
@@ -61,12 +68,8 @@
   There are some `nil` `:name` strings in the `region` and `municipality` tables. `airport` has a row with an airport
   whose `:code` is an empty string.")
 
-(tx/defdataset-edn sample-dataset
-  "The sample database that ships with Metabase, but converted to an EDN dataset definition so it can be used in tests.
-  This dataset is pretty large (over 20k rows) so it can take a long time to load -- keep that in mind. There is one
-  difference from the H2 version that ships with Metabase -- this version uses `:type/DateTimeWithTZ` `updated_at`
-  columns (i.e., `TIMESTAMP WITH TIME ZONE`) instead of `:type/DateType`, to make it easier to use this test data
-  across multiple databases.")
+(tx/defdataset-edn json
+  "Dataset with some JSON columns in it. Used to test JSON columns.")
 
 (defn- date-only
   "Convert date or datetime temporal value to `t` to an appropriate date type, discarding time information."
@@ -95,75 +98,75 @@
 
 (defonce ^{:doc "The main `test-data` dataset, but only the `users` table, and with `last_login_date` and
   `last_login_time` instead of `last_login`."}
-  test-data-with-time
-  (tx/transformed-dataset-definition "test-data-with-time" test-data
-    (tx/transform-dataset-only-tables "users")
-    (tx/transform-dataset-update-table "users"
-      :table
-      (fn [tabledef]
-        (update
-         tabledef
-         :field-definitions
-         (fn [[name-field-def _ password-field-def]]
-           [name-field-def
-            (tx/map->FieldDefinition {:field-name "last_login_date", :base-type :type/Date})
-            (tx/map->FieldDefinition {:field-name "last_login_time", :base-type :type/Time})
-            password-field-def])))
-      :rows
-      (fn [rows]
-        (for [[username last-login password-text] rows]
-          [username (date-only last-login) (time-only last-login) password-text])))))
+  time-test-data
+  (tx/transformed-dataset-definition "time-test-data" test-data
+                                     (tx/transform-dataset-only-tables "users")
+                                     (tx/transform-dataset-update-table "users"
+                                                                        :table
+                                                                        (fn [tabledef]
+                                                                          (update
+                                                                           tabledef
+                                                                           :field-definitions
+                                                                           (fn [[name-field-def _ password-field-def]]
+                                                                             [name-field-def
+                                                                              (tx/map->FieldDefinition {:field-name "last_login_date", :base-type :type/Date})
+                                                                              (tx/map->FieldDefinition {:field-name "last_login_time", :base-type :type/Time})
+                                                                              password-field-def])))
+                                                                        :rows
+                                                                        (fn [rows]
+                                                                          (for [[username last-login password-text] rows]
+                                                                            [username (date-only last-login) (time-only last-login) password-text])))))
 
 (defonce ^{:doc "The main `test-data` dataset, with an additional (all-null) `null_only_date` Field."}
-  test-data-with-null-date-checkins
-  (tx/transformed-dataset-definition "test-data-with-null-date-checkins" test-data
-    (tx/transform-dataset-update-table "checkins"
-      :table
-      (fn [tabledef]
-        (update
-         tabledef
-         :field-definitions
-         (fn [[date-field-def user-id-field-def venue-id-field-def]]
-           [date-field-def
-            (tx/map->FieldDefinition {:field-name "null_only_date", :base-type :type/Date})
-            user-id-field-def
-            venue-id-field-def])))
-      :rows
-      (fn [rows]
-        (for [[date user-id venue-id] rows]
-          [date nil user-id venue-id])))))
+  test-data-null-date
+  (tx/transformed-dataset-definition "test-data-null-date" test-data
+                                     (tx/transform-dataset-update-table "checkins"
+                                                                        :table
+                                                                        (fn [tabledef]
+                                                                          (update
+                                                                           tabledef
+                                                                           :field-definitions
+                                                                           (fn [[date-field-def user-id-field-def venue-id-field-def]]
+                                                                             [date-field-def
+                                                                              (tx/map->FieldDefinition {:field-name "null_only_date", :base-type :type/Date})
+                                                                              user-id-field-def
+                                                                              venue-id-field-def])))
+                                                                        :rows
+                                                                        (fn [rows]
+                                                                          (for [[date user-id venue-id] rows]
+                                                                            [date nil user-id venue-id])))))
 
 (defonce ^{:doc "The main `test-data` dataset, but `last_login` has a base type of `:type/DateTimeWithTZ`."}
-  test-data-with-timezones
-  (tx/transformed-dataset-definition "test-data-with-timezones" test-data
-    (tx/transform-dataset-update-table "users"
-      :table
-      (fn [tabledef]
-        (update
-         tabledef
-         :field-definitions
-         (fn [[name-field-def _ password-field-def]]
-           [name-field-def
-            (tx/map->FieldDefinition {:field-name "last_login", :base-type :type/DateTimeWithTZ})
-            password-field-def]))))))
+  tz-test-data
+  (tx/transformed-dataset-definition "tz-test-data" test-data
+                                     (tx/transform-dataset-update-table "users"
+                                                                        :table
+                                                                        (fn [tabledef]
+                                                                          (update
+                                                                           tabledef
+                                                                           :field-definitions
+                                                                           (fn [[name-field-def _ password-field-def]]
+                                                                             [name-field-def
+                                                                              (tx/map->FieldDefinition {:field-name "last_login", :base-type :type/DateTimeWithTZ})
+                                                                              password-field-def]))))))
 
 (defonce ^{:doc "The usual `test-data` dataset, but only the `users` table; adds a `created_by` column to the users
   table that is self referencing."}
   test-data-self-referencing-user
   (tx/transformed-dataset-definition "test-data-self-referencing-user" test-data
-    (tx/transform-dataset-only-tables "users")
-    (tx/transform-dataset-update-table "users"
-      :table
-      (fn [tabledef]
-        (update tabledef :field-definitions concat [(tx/map->FieldDefinition
-                                                     {:field-name "created_by", :base-type :type/Integer, :fk :users})]))
+                                     (tx/transform-dataset-only-tables "users")
+                                     (tx/transform-dataset-update-table "users"
+                                                                        :table
+                                                                        (fn [tabledef]
+                                                                          (update tabledef :field-definitions concat [(tx/map->FieldDefinition
+                                                                                                                       {:field-name "created_by", :base-type :type/Integer, :fk :users})]))
       ;; created_by = user.id - 1, except for User 1, who was created by himself (?)
-      :rows
-      (fn [rows]
-        (for [[idx [username last-login password-text]] (m/indexed rows)]
-          [username last-login password-text (if (zero? idx)
-                                               1
-                                               idx)])))))
+                                                                        :rows
+                                                                        (fn [rows]
+                                                                          (for [[idx [username last-login password-text]] (m/indexed rows)]
+                                                                            [username last-login password-text (if (zero? idx)
+                                                                                                                 1
+                                                                                                                 idx)])))))
 
 (tx/defdataset attempted-murders
   "A dataset for testing temporal values with and without timezones. Records of number of crow counts spoted and the

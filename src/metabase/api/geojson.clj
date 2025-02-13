@@ -1,36 +1,65 @@
 (ns metabase.api.geojson
-  (:require [clojure.java.io :as io]
-            [compojure.core :refer [GET]]
-            [metabase.api.common :as api]
-            [metabase.models.setting :as setting :refer [defsetting]]
-            [metabase.util.i18n :as ui18n :refer [deferred-tru tru]]
-            [metabase.util.schema :as su]
-            [ring.util.codec :as rc]
-            [ring.util.response :as rr]
-            [schema.core :as s])
-  (:import [java.net InetAddress URL]
-           org.apache.commons.io.input.ReaderInputStream))
+  (:require
+   [clj-http.client :as http]
+   [clojure.java.io :as io]
+   [clojure.string :as str]
+   [metabase.api.common.validation :as validation]
+   [metabase.api.macros :as api.macros]
+   [metabase.models.setting :as setting :refer [defsetting]]
+   [metabase.util.i18n :refer [deferred-tru tru]]
+   [metabase.util.malli.registry :as mr]
+   [metabase.util.malli.schema :as ms]
+   [ring.util.codec :as codec]
+   [ring.util.response :as response])
+  (:import
+   (java.io BufferedReader)
+   (java.net InetAddress URL)
+   (org.apache.commons.io.input ReaderInputStream)))
+
+(set! *warn-on-reflection* true)
+
+(defsetting custom-geojson-enabled
+  (deferred-tru "Whether or not the use of custom GeoJSON is enabled.")
+  :visibility :admin
+  :export?    true
+  :type       :boolean
+  :default    true
+  :audit      :getter)
 
 (def ^:private CustomGeoJSON
-  {s/Keyword {:name                     su/NonBlankString
-              :url                      su/NonBlankString
-              :region_key               (s/maybe s/Str)
-              :region_name              (s/maybe s/Str)
-              (s/optional-key :builtin) s/Bool}})
+  [:map-of :keyword [:map {:closed true}
+                     [:name                         ms/NonBlankString]
+                     [:url                          ms/NonBlankString]
+                     [:region_key                   [:maybe :string]]
+                     [:region_name                  [:maybe :string]]
+                     [:builtin     {:optional true} :boolean]]])
 
-(def ^:private builtin-geojson
-  {:us_states       {:name        "United States"
-                     :url         "app/assets/geojson/us-states.json"
-                     :region_key  "STATE"
-                     :region_name "NAME"
-                     :builtin     true}
-   :world_countries {:name        "World"
-                     :url         "app/assets/geojson/world.json"
-                     :region_key  "ISO_A2"
-                     :region_name "NAME"
-                     :builtin     true}})
+(def ^:private CustomGeoJSONValidator (mr/validator CustomGeoJSON))
 
-(defn-  invalid-location-msg []
+(defsetting default-maps-enabled
+  (deferred-tru "Whether or not the default GeoJSON maps are enabled.")
+  :visibility :admin
+  :export?    true
+  :type       :boolean
+  :default    true
+  :audit      :getter)
+
+(defn- builtin-geojson
+  []
+  (if (default-maps-enabled)
+    {:us_states       {:name        "United States"
+                       :url         "app/assets/geojson/us-states.json"
+                       :region_key  "STATE"
+                       :region_name "NAME"
+                       :builtin     true}
+     :world_countries {:name        "World"
+                       :url         "app/assets/geojson/world.json"
+                       :region_key  "ISO_A2"
+                       :region_name "NAME"
+                       :builtin     true}}
+    {}))
+
+(defn- invalid-location-msg []
   (str (tru "Invalid GeoJSON file location: must either start with http:// or https:// or be a relative path to a file on the classpath.")
        " "
        (tru "URLs referring to hosts that supply internal hosting metadata are prohibited.")))
@@ -73,61 +102,104 @@
 (defn- validate-geojson
   "Throws a 400 if the supplied `geojson` is poorly structured or has an illegal URL/path"
   [geojson]
-  (try
-    (s/validate CustomGeoJSON geojson)
-    (catch Throwable e
-      (throw (ex-info (tru "Invalid custom GeoJSON") {:status-code 400} e))))
+  (when-not (CustomGeoJSONValidator geojson)
+    (throw (ex-info (tru "Invalid custom GeoJSON") {:status-code 400})))
   (or (valid-geojson-urls? geojson)
       (throw (ex-info (invalid-location-msg) {:status-code 400}))))
 
 (defsetting custom-geojson
   (deferred-tru "JSON containing information about custom GeoJSON files for use in map visualizations instead of the default US State or World GeoJSON.")
-  :type    :json
-  :default {}
-  :getter  (fn [] (merge (setting/get-value-of-type :json :custom-geojson) builtin-geojson))
-  :setter  (fn [new-value]
-             ;; remove the built-in keys you can't override them and we don't want those to be subject to validation.
-             (let [new-value (not-empty (reduce dissoc new-value (keys builtin-geojson)))]
-               (when new-value
-                 (validate-geojson new-value))
-               (setting/set-value-of-type! :json :custom-geojson new-value)))
-  :visibility :public)
+  :encryption :no
+  :type       :json
+  :getter     (fn [] (merge (setting/get-value-of-type :json :custom-geojson) (builtin-geojson)))
+  :setter     (fn [new-value]
+                ;; remove the built-in keys you can't override them and we don't want those to be subject to validation.
+                (let [new-value (not-empty (reduce dissoc new-value (keys (builtin-geojson))))]
+                  (when new-value
+                    (validate-geojson new-value))
+                  (setting/set-value-of-type! :json :custom-geojson new-value)))
+  :visibility :public
+  :export?    true
+  :audit      :raw-value)
 
-(api/defendpoint-async GET "/:key"
+(def ^:private connection-timeout-ms 8000)
+
+(defn- url->geojson
+  [url]
+  (let [resp (try (http/get url {:as                 :reader
+                                 :redirect-strategy  :none
+                                 :socket-timeout     connection-timeout-ms
+                                 :connection-timeout connection-timeout-ms
+                                 :throw-exceptions   false})
+                  (catch Throwable _
+                    (throw (ex-info (tru "GeoJSON URL failed to load") {:status-code 400}))))
+        success? (<= 200 (:status resp) 399)
+        allowed-content-types #{"application/geo+json"
+                                "application/vnd.geo+json"
+                                "application/json"
+                                "text/plain"}
+        ;; if the content-type header is missing, just pretend it's `text/plain` and let it through
+        content-type (get-in resp [:headers :content-type] "text/plain")
+        ok-content-type? (some #(str/starts-with? content-type %)
+                               allowed-content-types)]
+    (cond
+      (not success?)
+      (throw (ex-info (tru "GeoJSON URL failed to load") {:status-code 400}))
+
+      (not ok-content-type?)
+      (throw (ex-info (tru "GeoJSON URL returned invalid content-type") {:status-code 400}))
+
+      :else (:body resp))))
+
+(defn- url->reader [url]
+  (if-let [resource (io/resource url)]
+    (io/reader resource)
+    (url->geojson url)))
+
+(defn- read-url-and-respond
+  "Reads the provided URL and responds with the contents as a stream."
+  [url respond]
+  (with-open [^BufferedReader reader (url->reader url)
+              is                     (ReaderInputStream. reader)]
+    (respond (-> (response/response is)
+                 (response/content-type "application/json")))))
+
+(api.macros/defendpoint :get "/:key"
   "Fetch a custom GeoJSON file as defined in the `custom-geojson` setting. (This just acts as a simple proxy for the
   file specified for `key`)."
-  [{{:keys [key]} :params} respond raise]
-  {key su/NonBlankString}
-  (if-let [url (get-in (custom-geojson) [(keyword key) :url])]
+  [{k :key, :as _route-params} :- [:map
+                                   [:key ms/NonBlankString]]
+   _query-params
+   _body
+   _request
+   respond
+   raise]
+  (when-not (or (custom-geojson-enabled) ((builtin-geojson) (keyword k)))
+    (raise (ex-info (tru "Custom GeoJSON is not enabled") {:status-code 400})))
+  (if-let [url (get-in (custom-geojson) [(keyword k) :url])]
     (try
-      (with-open [reader (io/reader (or (io/resource url)
-                                        url))
-                  is     (ReaderInputStream. reader)]
-        (respond (-> (rr/response is)
-                     (rr/content-type "application/json"))))
-      (catch Throwable _e
-        (raise (ex-info (tru "GeoJSON URL failed to load") {:status-code 400}))))
-    (raise (ex-info (tru "Invalid custom GeoJSON key: {0}" key) {:status-code 400}))))
+      (read-url-and-respond url respond)
+      (catch Throwable e
+        (raise e)))
+    (raise (ex-info (tru "Invalid custom GeoJSON key: {0}" k) {:status-code 400}))))
 
-(api/defendpoint-async GET "/"
+(api.macros/defendpoint :get "/"
   "Load a custom GeoJSON file based on a URL or file path provided as a query parameter.
   This behaves similarly to /api/geojson/:key but doesn't require the custom map to be saved to the DB first."
-  [{{:keys [url]} :params} respond raise]
-  {url su/NonBlankString}
-  (api/check-superuser)
-  (let [decoded-url (rc/url-decode url)]
+  [_route-params
+   {:keys [url], :as _query-params} :- [:map
+                                        [:url ms/NonBlankString]]
+   _body
+   _request
+   respond
+   raise]
+  (validation/check-has-application-permission :setting)
+  (when-not (custom-geojson-enabled)
+    (raise (ex-info (tru "Custom GeoJSON is not enabled") {:status-code 400})))
+  (let [decoded-url (codec/url-decode url)]
     (try
       (when-not (valid-geojson-url? decoded-url)
         (throw (ex-info (invalid-location-msg) {:status-code 400})))
-      (try
-        (with-open [reader (io/reader (or (io/resource decoded-url)
-                                          decoded-url))
-                    is     (ReaderInputStream. reader)]
-          (respond (-> (rr/response is)
-                       (rr/content-type "application/json"))))
-        (catch Throwable _
-          (throw (ex-info (tru "GeoJSON URL failed to load") {:status-code 400}))))
+      (read-url-and-respond decoded-url respond)
       (catch Throwable e
         (raise e)))))
-
-(api/define-routes)

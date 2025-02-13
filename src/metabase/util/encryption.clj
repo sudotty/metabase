@@ -1,16 +1,25 @@
 (ns metabase.util.encryption
   "Utility functions for encrypting and decrypting strings using AES256 CBC + HMAC SHA512 and the
   `MB_ENCRYPTION_SECRET_KEY` env var."
-  (:require [buddy.core.codecs :as codecs]
-            [buddy.core.crypto :as crypto]
-            [buddy.core.kdf :as kdf]
-            [buddy.core.nonce :as nonce]
-            [clojure.string :as str]
-            [clojure.tools.logging :as log]
-            [environ.core :as env]
-            [metabase.util :as u]
-            [metabase.util.i18n :refer [trs]]
-            [ring.util.codec :as codec]))
+  (:require
+   [buddy.core.bytes :as bytes]
+   [buddy.core.codecs :as codecs]
+   [buddy.core.crypto :as crypto]
+   [buddy.core.kdf :as kdf]
+   [buddy.core.nonce :as nonce]
+   [clojure.string :as str]
+   [environ.core :as env]
+   [metabase.util :as u]
+   [metabase.util.i18n :refer [trs]]
+   [metabase.util.log :as log]
+   [ring.util.codec :as codec])
+  (:import (java.io ByteArrayInputStream InputStream SequenceInputStream)
+           (javax.crypto Cipher CipherInputStream)
+           (javax.crypto.spec SecretKeySpec IvParameterSpec)))
+
+(set! *warn-on-reflection* true)
+
+(def ^:private ^:const aes-streaming-spec "AES/CBC/PKCS5Padding")
 
 (defn secret-key->hash
   "Generate a 64-byte byte array hash of `secret-key` using 100,000 iterations of PBKDF2+SHA512."
@@ -34,16 +43,20 @@
 (defonce ^:private ^{:tag 'bytes} default-secret-key
   (validate-and-hash-secret-key (env/env :mb-encryption-secret-key)))
 
+(defn default-encryption-enabled?
+  "Is the `MB_ENCRYPTION_SECRET_KEY` set, enabling encryption?"
+  []
+  (boolean default-secret-key))
+
 ;; log a nice message letting people know whether DB details encryption is enabled
 (when-not *compile-files*
   (log/info
    (if default-secret-key
-     (trs "Saved credentials encryption is ENABLED for this Metabase instance.")
-     (trs "Saved credentials encryption is DISABLED for this Metabase instance."))
+     "Saved credentials encryption is ENABLED for this Metabase instance."
+     "Saved credentials encryption is DISABLED for this Metabase instance.")
    (u/emoji (if default-secret-key "🔐" "🔓"))
    "\n"
-   (trs "For more information, see")
-   "https://metabase.com/docs/latest/operations-guide/encrypting-database-details-at-rest.html"))
+   "For more information, see https://metabase.com/docs/latest/operations-guide/encrypting-database-details-at-rest.html"))
 
 (defn encrypt-bytes
   "Encrypt bytes `b` using a `secret-key` (a 64-byte byte array), by default is the hashed value of
@@ -54,11 +67,11 @@
   (^String [^String secret-key, ^bytes b]
    (let [initialization-vector (nonce/random-bytes 16)]
      (->> (crypto/encrypt b
-            secret-key
-            initialization-vector
-            {:algorithm :aes256-cbc-hmac-sha512})
-       (concat initialization-vector)
-       byte-array))))
+                          secret-key
+                          initialization-vector
+                          {:algorithm :aes256-cbc-hmac-sha512})
+          (concat initialization-vector)
+          byte-array))))
 
 (defn encrypt
   "Encrypt string `s` as hex bytes using a `secret-key` (a 64-byte byte array), which by default is the hashed value of
@@ -82,6 +95,54 @@
                      secret-key
                      (byte-array initialization-vector)
                      {:algorithm :aes256-cbc-hmac-sha512}))))
+
+(defn encrypt-stream
+  "Wraps a plaintext input stream into an input stream that encrypts it using AES256 CBC.
+  The encryption format is slightly different for streams vs. fixed length data"
+  {:added "0.53.0"}
+  (^InputStream [^InputStream input-stream]
+   (encrypt-stream default-secret-key input-stream))
+  (^InputStream [secret-key ^InputStream input-stream]
+   (let [spec aes-streaming-spec
+         spec-header (codecs/to-bytes (format "%-32s" spec))
+         cipher (Cipher/getInstance spec)
+         iv (nonce/random-bytes 16)]
+     (.init cipher Cipher/ENCRYPT_MODE (SecretKeySpec. (bytes/slice secret-key 32 64) "AES") (IvParameterSpec. iv))
+     (SequenceInputStream. (ByteArrayInputStream. (bytes/concat spec-header iv)) (CipherInputStream. input-stream cipher)))))
+
+(defn encrypt-for-stream
+  "Encrypts a byte-array in a way that can be used to read it with decrypt-stream instead of decrypt."
+  {:added "0.53.0"}
+  (^bytes [^bytes input]
+   (encrypt-for-stream default-secret-key input))
+  (^bytes [secret-key ^bytes input]
+   (with-open [encrypted (encrypt-stream secret-key (ByteArrayInputStream. input))]
+     (.readAllBytes encrypted))))
+
+(defn maybe-decrypt-stream
+  "Wraps a possibly-encrypted input stream into a new input stream that decrypts it if necessary."
+  {:added "0.53.0"}
+  (^InputStream [^InputStream input-stream]
+   (maybe-decrypt-stream default-secret-key input-stream))
+  (^InputStream [secret-key ^InputStream input-stream]
+   (let [spec-array (byte-array 32)
+         spec-array-length (.read input-stream spec-array)
+         spec (str/trim (codecs/bytes->str spec-array))]
+     (cond
+       (= spec-array-length -1)
+       input-stream
+
+       (and (= spec-array-length 32) (= spec aes-streaming-spec))
+       (let [cipher (Cipher/getInstance spec)
+             iv (byte-array 16)
+             _ (.read input-stream iv)]
+         (.init cipher Cipher/DECRYPT_MODE (SecretKeySpec. (bytes/slice secret-key 32 64) "AES") (IvParameterSpec. iv))
+         (CipherInputStream. input-stream cipher))
+
+       :else
+       (SequenceInputStream.
+        (ByteArrayInputStream. (bytes/slice spec-array 0 spec-array-length))
+        input-stream)))))
 
 (defn decrypt
   "Decrypt string `s` using a `secret-key` (a 64-byte byte array), by default the hashed value of
@@ -113,6 +174,15 @@
        (encrypt-bytes secret-key b))
      b)))
 
+(defn maybe-encrypt-for-stream
+  "If `MB_ENCRYPTION_SECRET_KEY` is set, return an encrypted version of `s` that can be used to stream the data; otherwise return `s` as-is."
+  (^bytes [^bytes s]
+   (maybe-encrypt-for-stream default-secret-key s))
+  (^bytes [secret-key, ^bytes s]
+   (if secret-key
+     (encrypt-for-stream secret-key s)
+     s)))
+
 (def ^:private ^:const aes256-tag-length 32)
 (def ^:private ^:const aes256-block-size 16)
 
@@ -127,7 +197,7 @@
     (u/ignore-exceptions
       (when-let [byte-length (alength b)]
         (zero? (mod (- byte-length aes256-tag-length)
-                 aes256-block-size))))))
+                    aes256-block-size))))))
 
 (defn possibly-encrypted-string?
   "Returns true if it's likely that `s` is an encrypted string. Specifically we need `s` to be a non-blank, base64
@@ -144,22 +214,18 @@
   "If `MB_ENCRYPTION_SECRET_KEY` is set and `v` is encrypted, decrypt `v`; otherwise return `s` as-is. Attempts to check
   whether `v` is an encrypted String, in which case the decrypted String is returned, or whether `v` is encrypted bytes,
   in which case the decrypted bytes are returned."
-  {:arglists '([secret-key? s & {:keys [log-errors?], :or {log-errors? true}}])}
+  {:arglists '([secret-key? s])}
   [& args]
-  (let [[secret-key & more]        (if (and (bytes? (first args)) (string? (second args))) ;TODO: fix hackiness
-                                     args
-                                     (cons default-secret-key args))
-        [v & options]              more
-        {:keys [log-errors?]
-         :or   {log-errors? true}} (apply hash-map options)
+  ;; secret-key as an argument so that tests can pass it directly without using `with-redefs` to run in parallel
+  (let [[secret-key v]     (if (and (bytes? (first args)) (string? (second args)))
+                             args
+                             (cons default-secret-key args))
         log-error-fn (fn [kind ^Throwable e]
-                       (when log-errors?
-                         (log/warn (trs "Cannot decrypt encrypted {0}. Have you changed or forgot to set MB_ENCRYPTION_SECRET_KEY?"
-                                        kind)
-                                   (.getMessage e)
-                                   (u/pprint-to-str (u/filtered-stacktrace e)))))]
+                       (log/warnf e
+                                  "Cannot decrypt encrypted %s. Have you changed or forgot to set MB_ENCRYPTION_SECRET_KEY?"
+                                  kind))]
 
-    (cond (not (some? secret-key))
+    (cond (nil? secret-key)
           v
 
           (possibly-encrypted-string? v)

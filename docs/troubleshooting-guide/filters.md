@@ -1,64 +1,111 @@
-# My dashboard filters don't work
+---
+title: Troubleshooting filters
+---
 
-You've tried to add a [filter widget][filter-widget-gloss] to your dashboard, but:
+# Troubleshooting filters
 
-- the question you want to connect the filter to doesn't show up, or
-- the filter doesn't show a dropdown list of possible values when you use it, or
-- the filter removes all of the rows from the table no matter what value you set it to.
+It's always a good idea to start with a quick sanity check:
 
-If you've created a [linked filter][linked-filter-gloss], please see [this troubleshooting guide][troubleshoot-linked-filters] instead.
+1. Clear your browser cache.
+2. Refresh the page.
+3. Open your question or dashboard in an incognito window.
 
-## Is the dashboard filter actually connected to your question?
+## Dashboard filters
 
-**Root cause:** The filter isn't connected to any cards on the dashboard, or connected to the wrong field.
+If a dashboard filter is giving you no results or the wrong results:
 
-**Steps to take:**
+1. Click the **pencil** icon to go into edit mode.
+2. Click the **gear** icon beside your filter widget.
+3. Make sure you've selected a column for your filter under **Column to filter on**.
+4. If you can't find the right **Column to filter on**, or you're getting "No Results" when you apply the filter:
+   - Exit edit mode and click on a dashboard card to go to the _original question_.
+   - Follow the troubleshooting steps under [Question filters](#question-filters).
 
-1. In dashboard edit mode, click on the gear icon next to the filter. Check that each card you want to wire up to the filter has a column selected.
-2. If no columns are available to select on that card, you may need to change the filter type, from say a text filter to a date filter, to connect the filter to the card.
-3. Check that the filter widget is connected to the column you want to filter on each relevant card.
+## Question filters
 
-## If the card you're trying to filter is written in SQL, does its SQL query contain a variable?
+If a question filter is giving you no results or the wrong results:
 
-**Root cause**: If your SQL question doesn't contain a variable, the filter can't insert the value into the query to filter the results.
+1. Make sure the question includes the column you want to filter on.
+2. Check that the column actually contains the value(s) you're filtering on. You can do this by:
+   - sorting number or date columns,
+   - creating a "contains" filter for string columns, or
+   - asking your database admin.
+3. Ask your Metabase admin to help you check if:
+   - Metabase is [up to date](../databases/sync-scan.md) with your database,
+   - the column is [visible](../data-modeling/metadata-editing.md#column-visibility) in Metabase,
+   - you have the correct [data permissions](../permissions/data.md) to access the column.
 
-**Steps to take**:
+### Special cases
 
-1. Check that your SQL query contains at least [one variable][sql-variable] for the filter to insert the value. These can be plain variables, or [Field Filters][field-filter], with names enclosed in double curly braces `{% raw %}{{variable_name}}{% endraw %}`, typically in a `WHERE` clause.
+If you're having trouble filtering on a:
 
-If you built your question in the Query Builder, Metabase knows which columns you're using, and which columns you can connect to different types of filters. So you can add a dashboard filter and refer to columns in the question's results without creating variables explicitly.
+- [Custom column](../questions/query-builder/editor.md#custom-columns): check if the custom expression is working as expected. For example, your custom expression might be returning blank values when you expect numbers.
+- [SQL field filter](../questions/native-editor/sql-parameters.md#the-field-filter-variable-type): make sure you're using the correct [field filter syntax](../questions/native-editor/sql-parameters.md#field-filter-syntax), then see [Troubleshooting SQL variables](./sql.md#sql-variables-and-field-filters).
 
-## Are you seeing a different kind of input widget than you expected?
+**Explanation**
 
-For example, you want a dropdown but you're seeing a search box or a text input box.
+When we first set up a filter, we need to link the filter to a column. If we make the wrong assumptions about a column's values or data type, the filter won't work at all. If a column changes on the database side, the filter might suddenly stop working.
 
-**Root cause:** Metabase only displays a dropdown list of possible values for a variable if it knows that the field in question is a category rather than (for example) an arbitrary number or arbitrary text. However, if the number of unique categories exceeds 100 values, Metabase will display a search box with autocomplete instead of a dropdown.
+For example, let's say we want to create a filter named "Select Product ID" linked to a column named **Product ID**. The filter won't work if any of these things happen:
 
-**Steps to take:**
+- Our question doesn't include the **Product ID** column.
+- We type the number 4 into the "Select Product ID" filter, when the **Product ID** column only contains the values 1, 2, and 3.
+- **Product ID** is renamed to something else in the database or Table Metadata page.
+- **Product ID** is deleted from the database, or hidden in the Table Metadata page.
+- **Product ID** is a custom column that's not working as expected.
+- We don't have data permissions to access the **Product ID** column.
+- We made "Select Product ID" a numerical filter, but **Product ID** is a string column (see the section below).
 
-1. Go to the **Admin Panel** and select the **Data Model** tab.
-2. Select the database, schema, table, and field in question.
-3. Click the gear-icon to view all the field's settings.
-4. Set **Field Type** to "Category" and **Filtering on this field** to "A list of all values."
-5. Click the button **Re-scan this field** in the bottom.
+## Time, ID, and number filters
 
-If you created the question in SQL, then you only get a dropdown if the filter is a Field Filter _and_ the Filtering on this field option is set to your preferred input type: A list of all values (dropdown list) _and_ the number of unique values is less than 100.
+To debug dashboard and question filters that involve timestamps, UUIDs, or numeric data:
 
-## Has someone renamed or deleted columns in the database?
+1. Find the [data type](https://www.metabase.com/learn/grow-your-data-skills/data-fundamentals/data-types-overview) of the column that you want to filter on. You can find this info from:
+   - the [Data reference](../exploration-and-organization/data-model-reference.md),
+   - the [Table Metadata page](../data-modeling/metadata-editing.md) (admins only), or
+   - directly from the database.
+2. Cast the column to a data type that matches the desired [filter type](../questions/query-builder/filters.md#filter-types). You can:
+   - [cast strings or numbers to dates](../data-modeling/metadata-editing.md#casting-to-a-specific-data-type) from the Table Metadata page, or
+   - change the data type of the column in your database, and [re-sync](../databases/sync-scan.md#manually-syncing-tables-and-columns) the database schema.
 
-**Root cause:** Someone has changed the database schema, e.g., renamed or deleted a column in a table.
+If you're not a Metabase admin, you might have to ask your admin to help you with some of these steps.
 
-**Steps to take:**
+**Explanation**
 
-If a filter that used to work no longer seems to, or seems to eliminate all of the rows:
+Metabase needs to know the data type of a column in order to present you with a curated selection of filter types. Sometimes these columns are mistyped---if a column stores your numbers as strings, Metabase will only show you text or category filters (with options like "is", "is not") instead of number filters (with options like "greater than", "less than").
 
-1. [Re-sync][sync-scan] Metabase with the database (i.e., refresh Metabase's understanding of the database's structure).
-2. Compare the names of the fields used in the question with the actual names of the fields in the database.
-3. Modify the question to match the current database schema.
+Timestamps, in particular, are the root of all evil, so please be patient with your Metabase admin (or yourself!) when trying to get the data type right.
 
-[field-filter]: /learn/sql-questions/field-filters.html
-[filter-widget-gloss]: /glossary.html#filter_widget
-[linked-filter-gloss]: /glossary.html#linked_filter
-[sql-variable]: /learn/sql-questions/sql-variables.html
-[sync-scan]: ./sync-fingerprint-scan.html
-[troubleshoot-linked-filters]: ./linked-filters.html
+## Field filters in BigQuery and Oracle
+
+If you are getting an error when using field filters with BigQuery or Oracle, make sure you use the correct syntax for the `FROM` clause. See [Field filters in BigQuery and Oracle](../questions/native-editor/sql-parameters.md#field-filters-in-bigquery-and-oracle).
+
+## Missing or incorrect filter values
+
+If your filter dropdown menu displays the wrong values for a column:
+
+1. Go to **Admin settings** > **Table Metadata**.
+2. Find your database, table, and column.
+3. Click the **gear** icon at the right of a column’s settings box.
+4. Scroll to **Cached field values**.
+5. Optional: click **Discard cached field values**.
+6. Click **Re-scan this field**.
+
+**Explanation**
+
+Metabase [scans](../databases/sync-scan.md#how-database-scans-work) get the values for your filter dropdown menus by querying and caching the first 1,000 distinct records from a table. You might see outdated filter values if your tables are getting updated more frequently compared to your [scan schedule](../databases/sync-scan.md#scheduling-database-scans).
+
+## Related topics
+
+- [Troubleshooting linked filters](./linked-filters.md)
+- [Troubleshooting SQL variables and field filters](./sql.md#sql-variables-and-field-filters)
+- [Troubleshooting dates and times](./timezones.md)
+- [Creating dropdown filters](../data-modeling/metadata-editing.md#changing-a-search-box-filter-to-a-dropdown-filter)
+- [Creating SQL filters](../questions/native-editor/sql-parameters.md)
+
+## Are you still stuck?
+
+If you can’t solve your problem using the troubleshooting guides:
+
+- Search or ask the [Metabase community](https://discourse.metabase.com/).
+- Search for [known bugs or limitations](./known-issues.md).

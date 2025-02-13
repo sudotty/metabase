@@ -1,4 +1,4 @@
-import { isNumber, isCoordinate } from "metabase/lib/schema_metadata";
+import { isCoordinate, isNumber } from "metabase-lib/v1/types/utils/isa";
 
 export function getTableClickedObjectRowData(
   [series],
@@ -42,7 +42,8 @@ export function getTableCellClickedObject(
   if (isPivoted) {
     // if it's a pivot table, the first column is
     if (columnIndex === 0) {
-      return row._dimension;
+      const { value, column: col } = row._dimension;
+      return { value, column: col, settings, data: [{ value, col }] };
     } else {
       return {
         value,
@@ -64,6 +65,9 @@ export function getTableCellClickedObject(
       data: clickedRowData,
     };
   } else {
+    // Clicks on aggregation columns can wind up here if the query has stages after the aggregation / breakout
+    // stage. In that case, column.source will be something like "fields", and it's up to Lib.availableDrillThrus
+    // to check the underlying column and construct the dimensions from the passed in clickedRowData.
     return {
       value,
       column,
@@ -84,7 +88,9 @@ export function getTableHeaderClickedObject(data, columnIndex, isPivoted) {
       return null; // FIXME?
     }
   } else {
-    return { column };
+    return {
+      column,
+    };
   }
 }
 

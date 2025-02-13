@@ -1,7 +1,6 @@
-import "core-js/stable";
 import "regenerator-runtime/runtime";
-import "number-to-locale-string";
-import "metabase/css/index.css";
+import "metabase/css/vendor.css";
+import "metabase/css/index.module.css";
 
 window.MetabaseBootstrap = {
   "enable-xrays": true,
@@ -17,7 +16,7 @@ window.MetabaseBootstrap = {
     "US/Pacific",
     "America/Costa_Rica",
   ],
-  "availabl-locales": [["en", "English"]],
+  "available-locales": [["en", "English"]],
   // NOTE: update this when updating types.clj
   types: {
     "type/DruidHyperUnique": ["type/*"],

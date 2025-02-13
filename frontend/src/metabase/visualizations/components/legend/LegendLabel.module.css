@@ -1,0 +1,12 @@
+.text {
+  color: var(--mb-color-text-primary);
+  font-weight: bold;
+}
+
+.link {
+  cursor: pointer;
+
+  &:hover {
+    color: var(--mb-color-brand);
+  }
+}

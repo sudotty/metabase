@@ -1,8 +1,32 @@
 (ns metabase-enterprise.search.scoring
-  ;; TODO -- move to `metabase-enterprise.<feature>.*`
-  (:require [metabase-enterprise.enhancements.ee-strategy-impl :as ee-strategy-impl]
-            [metabase.public-settings.premium-features :as settings.premium-features]
-            [metabase.search.scoring :as scoring]))
+  (:require
+   [metabase.premium-features.core :as premium-features :refer [defenterprise]]
+   [metabase.search.appdb.scoring :as appdb.scoring]
+   [metabase.search.config :as search.config]
+   [metabase.search.in-place.scoring :as scoring]))
+
+(def ^:private enterprise-scorers
+  {:official-collection {:expr (appdb.scoring/truthy :official_collection)
+                         :pred #(premium-features/has-feature? :official-collections)}
+   :verified            {:expr (appdb.scoring/truthy :verified)
+                         :pred #(premium-features/has-feature? :content-verification)}})
+
+(defn- additional-scorers
+  "Which additional scorers are active?"
+  []
+  (into {}
+        (keep (fn [[k {:keys [expr pred]}]]
+                (when (pred)
+                  [k expr])))
+        enterprise-scorers))
+
+(defenterprise scorers
+  "Return the select-item expressions used to calculate the score for each search result."
+  :feature :none
+  [search-ctx]
+  (merge (appdb.scoring/base-scorers search-ctx) (additional-scorers)))
+
+;; ------------ LEGACY ----------
 
 (defn- official-collection-score
   "A scorer for items in official collections"
@@ -18,20 +42,25 @@
     1
     0))
 
-(def scoring-impl
-  "Scoring implementation that adds score for items in official collections."
-  (reify scoring/ResultScore
-    (score-result [_ result]
-      (conj (scoring/score-result scoring/oss-score-impl result)
-            {:weight 2
-             :score  (official-collection-score result)
-             :name   "official collection score"}
-            {:weight 2
-             :score  (verified-score result)
-             :name   "verified"}))))
+(def ^:private legacy-scorers
+  {:official-collection official-collection-score
+   :verified            verified-score})
 
-(def ee-scoring
-  "Enterprise scoring of results, falling back to the open source version if enterprise is not enabled."
-  (ee-strategy-impl/reify-ee-strategy-impl #'settings.premium-features/enable-enhancements?
-                                           scoring-impl scoring/oss-score-impl
-                                           scoring/ResultScore))
+(defn- legacy-name [k]
+  (if (= k :official-collection)
+    "official collection score"
+    (name k)))
+
+(defn- legacy-score-result [k result]
+  {:name   (legacy-name k)
+   :score  (let [f (get legacy-scorers k)]
+             (f result))
+   :weight (search.config/weight :default k)})
+
+(defenterprise score-result
+  "Scoring implementation that adds score for items in official collections."
+  :feature :none
+  [result]
+  (into (scoring/weights-and-scores result)
+        (map #(legacy-score-result % result))
+        (keys (additional-scorers))))

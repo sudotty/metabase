@@ -3,12 +3,14 @@
   mostly so we can send people 'login from a new device' emails the first time they log in with a new browser. If this
   cookie is deleted, it's fine; the user will just get an email saying they logged in from a new device next time
   they log in."
-  (:require [java-time :as t]
-            [metabase.server.request.util :as request.u]
-            [metabase.util.schema :as su]
-            [ring.util.response :as resp]
-            [schema.core :as s])
-  (:import java.util.UUID))
+  (:require
+   [java-time.api :as t]
+   [metabase.request.core :as request]
+   [metabase.util.malli :as mu]
+   [metabase.util.malli.schema :as ms]
+   [ring.util.response :as response]))
+
+(set! *warn-on-reflection* true)
 
 (def ^:private browser-id-cookie-name "metabase.DEVICE")
 
@@ -23,12 +25,12 @@
           :path      "/"
           ;; Set the cookie to expire 20 years from now. That should be sufficient
           :expires   (t/format :rfc-1123-date-time (t/plus (t/zoned-date-time) (t/years 20)))}
-         (if (request.u/https? request)
+         (if (request/https? request)
            {:same-site :none, :secure true}
            {:same-site :lax})))
 
-(s/defn ^:private add-browser-id-cookie [request response browser-id :- su/NonBlankString]
-  (resp/set-cookie response browser-id-cookie-name browser-id (cookie-options request)))
+(mu/defn- add-browser-id-cookie [request response browser-id :- ms/NonBlankString]
+  (response/set-cookie response browser-id-cookie-name browser-id (cookie-options request)))
 
 (defn ensure-browser-id-cookie
   "Set a permanent browser identifier cookie if one is not already set."
@@ -36,7 +38,7 @@
   (fn [request respond raise]
     (if-let [browser-id (get-in request [:cookies browser-id-cookie-name :value])]
       (handler (assoc request :browser-id browser-id) respond raise)
-      (let [browser-id (str (UUID/randomUUID))]
+      (let [browser-id (str (random-uuid))]
         (handler
          (assoc request :browser-id browser-id)
          (fn [response]

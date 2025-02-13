@@ -1,110 +1,146 @@
-import {
-  getParameters,
-  getSidebar,
-  getShowAddQuestionSidebar,
-  getIsSharing,
-  getEditingParameterId,
-  getIsEditingParameter,
-  getClickBehaviorSidebarDashcard,
-} from "metabase/dashboard/selectors";
-import { SIDEBAR_NAME } from "./constants";
-import Field from "metabase-lib/lib/metadata/Field";
 import { chain } from "icepick";
 
-const STATE = {
+import { createMockEntitiesState } from "__support__/store";
+import {
+  getClickBehaviorSidebarDashcard,
+  getDashboardComplete,
+  getEditingParameterId,
+  getIsEditingParameter,
+  getIsSharing,
+  getParameters,
+  getShowAddQuestionSidebar,
+  getSidebar,
+} from "metabase/dashboard/selectors";
+import Field from "metabase-lib/v1/metadata/Field";
+import {
+  createMockCard,
+  createMockDashboardCard,
+  createMockField,
+  createMockHeadingDashboardCard,
+} from "metabase-types/api/mocks";
+import {
+  createMockSettingsState,
+  createMockState,
+} from "metabase-types/store/mocks";
+
+import { SIDEBAR_NAME } from "./constants";
+
+const STATE = createMockState({
   dashboard: {
     dashboardId: 0,
     dashboards: {
       0: {
-        ordered_cards: [0, 1],
+        dashcards: [0, 1, 2],
         parameters: [],
       },
     },
     dashcards: {
-      0: {
-        card: { id: 0, dataset_query: { type: "query", query: {} } },
+      0: createMockDashboardCard({
+        card: createMockCard({
+          id: 0,
+          dataset_query: {
+            type: "native",
+            query: {
+              "template-tags": {
+                foo: {
+                  type: "text",
+                },
+              },
+            },
+          },
+        }),
         parameter_mappings: [],
-      },
-      1: {
-        card: { id: 1, dataset_query: { type: "query", query: {} } },
+      }),
+      1: createMockDashboardCard({
+        card: createMockCard({
+          id: 1,
+          dataset_query: { type: "query", query: {} },
+        }),
         parameter_mappings: [],
-      },
+      }),
+      2: createMockHeadingDashboardCard(),
     },
     sidebar: {},
   },
-  entities: {
-    databases: {},
-    schemas: {},
-    tables: {},
-    fields: {
-      1: { id: 1 },
-      2: { id: 2 },
-    },
-    metrics: {},
-    segments: {},
-  },
-};
+  entities: createMockEntitiesState({
+    fields: [createMockField({ id: 1 }), createMockField({ id: 2 })],
+  }),
+  settings: createMockSettingsState(),
+});
 
 describe("dashboard/selectors", () => {
   describe("getParameters", () => {
     it("should work with no parameters", () => {
       expect(getParameters(STATE)).toEqual([]);
     });
-    it("should not include field id with no mappings", () => {
+
+    it("should return a parameter", () => {
       const state = chain(STATE)
-        .assocIn(["dashboard", "dashboards", 0, "parameters", 0], { id: 1 })
+        .assocIn(["dashboard", "dashboards", 0, "parameters", 0], {
+          id: 1,
+          type: "foo",
+        })
         .value();
       expect(getParameters(state)).toEqual([
         {
           id: 1,
-          fields: [],
-          field_ids: [],
-          field_id: null,
-          hasOnlyFieldTargets: true,
+          type: "foo",
         },
       ]);
     });
-    it("should not include field id with one mapping, no field id", () => {
+
+    it("should return a FieldFilterUiParameter mapped to a variable template tag", () => {
       const state = chain(STATE)
-        .assocIn(["dashboard", "dashboards", 0, "parameters", 0], { id: 1 })
+        .assocIn(["dashboard", "dashboards", 0, "parameters", 0], {
+          id: 1,
+          type: "string/=",
+        })
         .assocIn(["dashboard", "dashcards", 0, "parameter_mappings", 0], {
           card_id: 0,
           parameter_id: 1,
           target: ["variable", ["template-tag", "foo"]],
         })
         .value();
+
       expect(getParameters(state)).toEqual([
         {
           id: 1,
+          type: "string/=",
+          hasVariableTemplateTagTarget: true,
           fields: [],
-          field_ids: [],
-          field_id: null,
-          hasOnlyFieldTargets: false,
         },
       ]);
     });
-    it("should include field id with one mappings, with field id", () => {
+
+    it("should return a FieldFilterUiParameter mapped to a field", () => {
       const state = chain(STATE)
-        .assocIn(["dashboard", "dashboards", 0, "parameters", 0], { id: 1 })
+        .assocIn(["dashboard", "dashboards", 0, "parameters", 0], {
+          id: 1,
+          type: "string/=",
+        })
         .assocIn(["dashboard", "dashcards", 0, "parameter_mappings", 0], {
           card_id: 0,
           parameter_id: 1,
           target: ["dimension", ["field", 1, null]],
         })
         .value();
+
       expect(getParameters(state)).toEqual([
         {
           id: 1,
+          type: "string/=",
+          hasVariableTemplateTagTarget: false,
           fields: [expect.any(Field)],
-          field_ids: [1],
-          field_id: 1,
-          hasOnlyFieldTargets: true,
         },
       ]);
     });
-    it("should include field id with two mappings, with same field id", () => {
+
+    it("should return a FieldFilterUiParameter with two mappings to the same field", () => {
       const state = chain(STATE)
-        .assocIn(["dashboard", "dashboards", 0, "parameters", 0], { id: 1 })
+        .assocIn(["dashboard", "dashboards", 0, "parameters", 0], {
+          id: 1,
+          type: "string/=",
+        })
         .assocIn(["dashboard", "dashcards", 0, "parameter_mappings", 0], {
           card_id: 0,
           parameter_id: 1,
@@ -116,19 +152,23 @@ describe("dashboard/selectors", () => {
           target: ["dimension", ["field", 1, null]],
         })
         .value();
+
       expect(getParameters(state)).toEqual([
         {
           id: 1,
+          type: "string/=",
           fields: [expect.any(Field)],
-          field_ids: [1],
-          field_id: 1,
-          hasOnlyFieldTargets: true,
+          hasVariableTemplateTagTarget: false,
         },
       ]);
     });
-    it("should include field id with two mappings, one with field id, one without", () => {
+
+    it("should return a FieldFilterUiParameter that has mappings to a field and a template tag variable", () => {
       const state = chain(STATE)
-        .assocIn(["dashboard", "dashboards", 0, "parameters", 0], { id: 1 })
+        .assocIn(["dashboard", "dashboards", 0, "parameters", 0], {
+          id: 1,
+          type: "string/=",
+        })
         .assocIn(["dashboard", "dashcards", 0, "parameter_mappings", 0], {
           card_id: 0,
           parameter_id: 1,
@@ -140,19 +180,23 @@ describe("dashboard/selectors", () => {
           target: ["variable", ["template-tag", "foo"]],
         })
         .value();
+
       expect(getParameters(state)).toEqual([
         {
           id: 1,
+          type: "string/=",
           fields: [expect.any(Field)],
-          field_ids: [1],
-          field_id: 1,
-          hasOnlyFieldTargets: false,
+          hasVariableTemplateTagTarget: true,
         },
       ]);
     });
-    it("should include all field ids with two mappings, with different field ids", () => {
+
+    it("should return a FieldFilterUiParameter with two mappings to two different fields", () => {
       const state = chain(STATE)
-        .assocIn(["dashboard", "dashboards", 0, "parameters", 0], { id: 1 })
+        .assocIn(["dashboard", "dashboards", 0, "parameters", 0], {
+          id: 1,
+          type: "string/=",
+        })
         .assocIn(["dashboard", "dashcards", 0, "parameter_mappings", 0], {
           card_id: 0,
           parameter_id: 1,
@@ -164,13 +208,13 @@ describe("dashboard/selectors", () => {
           target: ["dimension", ["field", 2, null]],
         })
         .value();
+
       expect(getParameters(state)).toEqual([
         {
           id: 1,
+          type: "string/=",
           fields: [expect.any(Field), expect.any(Field)],
-          field_ids: [1, 2],
-          field_id: null,
-          hasOnlyFieldTargets: true,
+          hasVariableTemplateTagTarget: false,
         },
       ]);
     });
@@ -302,6 +346,67 @@ describe("dashboard/selectors", () => {
       expect(getClickBehaviorSidebarDashcard(state)).toEqual(
         state.dashboard.dashcards[1],
       );
+    });
+  });
+
+  describe("getDashboardComplete", () => {
+    const multiCardState = chain(STATE)
+      .assocIn(["dashboard", "dashboards", 0, "dashcards"], [0, 1, 2])
+      .assocIn(["dashboard", "dashcards", 2], {
+        card: { id: 2, dataset_query: { type: "query", query: {} } },
+        parameter_mappings: [],
+      })
+      .value();
+
+    const setup = positions => {
+      const newStateChain = chain(multiCardState);
+
+      positions.forEach((position, index) => {
+        newStateChain
+          .assocIn(["dashboard", "dashcards", index, "row"], position.row)
+          .assocIn(["dashboard", "dashcards", index, "col"], position.col);
+      });
+
+      return newStateChain.value();
+    };
+
+    it("should filter out removed dashcards", () => {
+      const state = chain(multiCardState)
+        .assocIn(["dashboard", "dashcards", 0, "isRemoved"], true)
+        .assocIn(["dashboard", "dashcards", 2, "isRemoved"], true)
+        .value();
+
+      expect(getDashboardComplete(state).dashcards).toEqual([
+        multiCardState.dashboard.dashcards[1],
+      ]);
+    });
+
+    it("should sort cards based on their positions top to bottom", () => {
+      const state = setup([
+        { row: 2, col: 0 },
+        { row: 1, col: 1 },
+        { row: 0, col: 2 },
+      ]);
+
+      const cards = getDashboardComplete(state).dashcards;
+
+      expect(cards[2].card.id).toBe(0);
+      expect(cards[1].card.id).toBe(1);
+      expect(cards[0].card.id).toBe(2);
+    });
+
+    it("should sort cards based on their positions left to right when on the same row", () => {
+      const state = setup([
+        { row: 0, col: 2 },
+        { row: 0, col: 1 },
+        { row: 0, col: 0 },
+      ]);
+
+      const cards = getDashboardComplete(state).dashcards;
+
+      expect(cards[2].card.id).toBe(0);
+      expect(cards[1].card.id).toBe(1);
+      expect(cards[0].card.id).toBe(2);
     });
   });
 });

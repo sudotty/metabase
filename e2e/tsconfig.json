@@ -1,0 +1,19 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "build",
+    "baseUrl": "./",
+    "types": [
+      "cypress",
+      "@testing-library/cypress",
+      "cypress-real-events",
+      "@cypress/grep"
+    ],
+    "paths": {
+      "e2e/*": ["./*"],
+      "@metabase/embedding-sdk-react": ["../enterprise/frontend/src/embedding-sdk/index.ts"],
+      "*": ["../frontend/src/*"]
+    }
+  },
+  "include": ["**/*"]
+}

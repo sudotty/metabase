@@ -1,9 +1,10 @@
-import { parse } from "metabase/lib/expressions/recursive-parser";
-import { resolve } from "metabase/lib/expressions/resolver";
+import { parse } from "metabase-lib/v1/expressions/recursive-parser";
+import { resolve } from "metabase-lib/v1/expressions/resolver";
 
-describe("metabase/lib/expressions/recursive-parser", () => {
+describe("metabase-lib/v1/expressions/recursive-parser", () => {
   const mockResolve = (kind, name) => [kind, name];
-  const process = (source, type) => resolve(parse(source), type, mockResolve);
+  const process = (source, type) =>
+    resolve({ expression: parse(source), type, fn: mockResolve });
   const filter = expr => process(expr, "boolean");
 
   // handy references
@@ -12,6 +13,7 @@ describe("metabase/lib/expressions/recursive-parser", () => {
   const A = ["segment", "A"];
   const B = ["dimension", "B"];
   const C = ["dimension", "C"];
+  const D = ["dimension", "D"];
 
   it("should parse numeric literals", () => {
     expect(process("0")).toEqual(0);
@@ -28,6 +30,11 @@ describe("metabase/lib/expressions/recursive-parser", () => {
   it("should parse field references", () => {
     expect(process("[Rating]")).toEqual(["dimension", "Rating"]);
     expect(process("Discount")).toEqual(["dimension", "Discount"]);
+  });
+
+  it("should parse bracketed field references (with escaping)", () => {
+    expect(process("[Sale \\[2022\\]]")).toEqual(["dimension", "Sale [2022]"]);
+    expect(process("[Crazy\\test]")).toEqual(["dimension", "Crazy\\test"]);
   });
 
   it("should parse unary expressions", () => {
@@ -101,30 +108,90 @@ describe("metabase/lib/expressions/recursive-parser", () => {
     ]);
   });
 
+  it("should handle IF expression", () => {
+    expect(process("IF(A,B)")).toEqual(["if", [[A, B]]]);
+    expect(process("IF(A,B,X,Y)")).toEqual([
+      "if",
+      [
+        [A, B],
+        [X, Y],
+      ],
+    ]);
+    expect(process("IF(A,B,C)")).toEqual(["if", [[A, B]], { default: C }]);
+    expect(process("IF(A,B,X,Y,C)")).toEqual([
+      "if",
+      [
+        [A, B],
+        [X, Y],
+      ],
+      { default: C },
+    ]);
+  });
+
   it("should use MBQL canonical function names", () => {
     expect(process("regexextract(B,C)")).toEqual(["regex-match-first", B, C]);
   });
 
-  it("should handle function options", () => {
-    expect(filter("contains(B, C, 'case-insensitive')")).toEqual([
-      "contains",
-      B,
-      C,
-      { "case-sensitive": false },
-    ]);
-    expect(filter("interval(B, -1, 'days', 'include-current')")).toEqual([
-      "time-interval",
-      B,
-      -1,
-      "days",
-      { "include-current": true },
-    ]);
+  it.each([
+    {
+      source: "contains(B, C, 'case-insensitive')",
+      expression: ["contains", B, C, { "case-sensitive": false }],
+    },
+    {
+      source: "contains(B, C, D)",
+      expression: ["contains", {}, B, C, D],
+    },
+    {
+      source: "contains(B, C, D, 'case-insensitive')",
+      expression: ["contains", { "case-sensitive": false }, B, C, D],
+    },
+    {
+      source: "doesNotContain(B, C, D, 'case-insensitive')",
+      expression: ["does-not-contain", { "case-sensitive": false }, B, C, D],
+    },
+    {
+      source: "startsWith(B, C, D, 'case-insensitive')",
+      expression: ["starts-with", { "case-sensitive": false }, B, C, D],
+    },
+    {
+      source: "endsWith(B, C, D, 'case-insensitive')",
+      expression: ["ends-with", { "case-sensitive": false }, B, C, D],
+    },
+    {
+      source: "interval(B, -1, 'days', 'include-current')",
+      expression: ["time-interval", B, -1, "days", { "include-current": true }],
+    },
+  ])("should handle function options: $source", ({ source, expression }) => {
+    expect(filter(source)).toEqual(expression);
   });
 
   it("should use MBQL negative shorthands", () => {
     expect(filter("NOT IsNull(1)")).toEqual(["not-null", 1]);
     expect(filter("NOT IsEmpty(2 + 3)")).toEqual(["not-empty", ["+", 2, 3]]);
     expect(filter("NOT contains(B,C)")).toEqual(["does-not-contain", B, C]);
+  });
+
+  it("should parse booleans", () => {
+    expect(process("Canceled = true")).toEqual([
+      "=",
+      ["dimension", "Canceled"],
+      true,
+    ]);
+    expect(process("Canceled = True")).toEqual([
+      "=",
+      ["dimension", "Canceled"],
+      true,
+    ]);
+    expect(process("Canceled = false")).toEqual([
+      "=",
+      ["dimension", "Canceled"],
+      false,
+    ]);
+    expect(process("Canceled = False")).toEqual([
+      "=",
+      ["dimension", "Canceled"],
+      false,
+    ]);
   });
 
   it("should parse comparisons", () => {
@@ -150,8 +217,64 @@ describe("metabase/lib/expressions/recursive-parser", () => {
   });
 
   it("should detect aggregation functions with no argument", () => {
-    expect(process("COUNT/2")).toEqual(["/", ["count"], 2]);
-    expect(process("1+CumulativeCount")).toEqual(["+", 1, ["cum-count"]]);
+    const mockResolve = (kind, name) => {
+      if ("ABC".indexOf(name) >= 0) {
+        return [kind, name];
+      }
+      throw new ReferenceError(`Unknown ["${kind}", "${name}"]`);
+    };
+    const type = "aggregation";
+    const aggregation = expr =>
+      resolve({ expression: parse(expr), type, fn: mockResolve });
+
+    // sanity check first
+    expect(aggregation("SUM(A)")).toEqual(["sum", ["dimension", "A"]]);
+    expect(aggregation("Max(B)")).toEqual(["max", ["dimension", "B"]]);
+    expect(aggregation("Average(C)")).toEqual(["avg", ["dimension", "C"]]);
+
+    // functions without argument, hence no "()"
+    expect(aggregation("Count")).toEqual(["count"]);
+    expect(aggregation("CumulativeCount")).toEqual(["cum-count"]);
+
+    // mixed them in some arithmetic
+    expect(aggregation("COUNT/B")).toEqual(["/", ["count"], ["metric", "B"]]);
+    expect(aggregation("1+CumulativeCount")).toEqual(["+", 1, ["cum-count"]]);
+  });
+
+  it("should handle aggregation with another function", () => {
+    const type = "aggregation";
+    const aggregation = expr =>
+      resolve({ expression: parse(expr), type, fn: mockResolve });
+
+    const A = ["dimension", "A"];
+    const B = ["dimension", "B"];
+
+    expect(aggregation("floor(Sum(A))")).toEqual(["floor", ["sum", A]]);
+    expect(aggregation("round(Distinct(B)/2)")).toEqual([
+      "round",
+      ["/", ["distinct", B], 2],
+    ]);
+  });
+
+  it("should prioritize existing metrics over functions", () => {
+    const mockResolve = (kind, name) => {
+      if (name === "Count" || "ABC".indexOf(name) >= 0) {
+        return [kind, name];
+      }
+      throw new ReferenceError(`Unknown ["${kind}", "${name}"]`);
+    };
+    const type = "aggregation";
+    const aggregation = expr =>
+      resolve({ expression: parse(expr), type, fn: mockResolve });
+
+    // sanity check first
+    expect(aggregation("SUM(A)")).toEqual(["sum", ["dimension", "A"]]);
+    expect(aggregation("Max(B)")).toEqual(["max", ["dimension", "B"]]);
+    expect(aggregation("Average(C)")).toEqual(["avg", ["dimension", "C"]]);
+
+    // Count is recognized as a metric instead of a function
+    expect(aggregation("[Count]")).toEqual(["metric", "Count"]);
+    expect(aggregation("[Count] + 7")).toEqual(["+", ["metric", "Count"], 7]);
   });
 
   it("should resolve segments", () => {

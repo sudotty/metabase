@@ -1,55 +1,101 @@
-import React, { useState } from "react";
+import type { Dispatch, MouseEvent, SetStateAction } from "react";
+import { useState } from "react";
 import { t } from "ttag";
 
-import Tooltip from "metabase/components/Tooltip";
-import { Item, Collection } from "metabase/collections/utils";
+import ActionMenu from "metabase/collections/components/ActionMenu";
+import type {
+  CreateBookmark,
+  DeleteBookmark,
+} from "metabase/collections/types";
+import EventSandbox from "metabase/components/EventSandbox";
+import Tooltip from "metabase/core/components/Tooltip";
+import { getIcon } from "metabase/lib/icon";
+import { modelToUrl } from "metabase/lib/urls";
+import { PLUGIN_MODERATION } from "metabase/plugins";
+import { Flex, type IconName, Skeleton } from "metabase/ui";
+import type Database from "metabase-lib/v1/metadata/Database";
+import type {
+  Bookmark,
+  Collection,
+  CollectionItem,
+  RecentCollectionItem,
+} from "metabase-types/api";
 
 import {
-  ItemLink,
-  ItemCard,
-  Header,
+  ActionsContainer,
   Body,
-  ItemIcon,
-  Title,
   Description,
-  HoverMenu,
+  Header,
+  ItemCard,
+  ItemIcon,
+  ItemLink,
+  Title,
 } from "./PinnedItemCard.styled";
 
-type Props = {
+type ItemOrSkeleton =
+  | {
+      /** If `item` is undefined, the `skeleton` prop must be true */
+      item: CollectionItem | RecentCollectionItem;
+      skeleton?: never;
+      iconForSkeleton?: never;
+    }
+  | {
+      item?: never;
+      skeleton: true;
+      iconForSkeleton: IconName;
+    };
+
+export type PinnedItemCardProps = {
+  databases?: Database[];
+  bookmarks?: Bookmark[];
+  createBookmark?: CreateBookmark;
+  deleteBookmark?: DeleteBookmark;
   className?: string;
-  item: Item;
-  collection: Collection;
-  onCopy: (items: Item[]) => void;
-  onMove: (items: Item[]) => void;
-};
+  collection?: Collection;
+  onCopy?: (items: CollectionItem[]) => void;
+  onMove?: (items: CollectionItem[]) => void;
+  onClick?: () => void;
+} & ItemOrSkeleton;
 
 const TOOLTIP_MAX_WIDTH = 450;
 
-function getDefaultDescription(model: string) {
-  return {
-    card: t`A question`,
-    dashboard: t`A dashboard`,
-    dataset: t`A model`,
-  }[model];
-}
+const DEFAULT_DESCRIPTION: Record<string, string> = {
+  card: t`A question`,
+  metric: t`A metric`,
+  dashboard: t`A dashboard`,
+  dataset: t`A model`,
+};
+
+const isCollectionItem = (
+  item: CollectionItem | RecentCollectionItem,
+): item is CollectionItem => {
+  return !("parent_collection" in item);
+};
 
 function PinnedItemCard({
+  databases,
+  bookmarks,
+  createBookmark,
+  deleteBookmark,
   className,
   item,
   collection,
   onCopy,
   onMove,
-}: Props) {
+  onClick,
+  iconForSkeleton,
+}: PinnedItemCardProps) {
   const [showTitleTooltip, setShowTitleTooltip] = useState(false);
-  const [showDescriptionTooltip, setShowDescriptionTooltip] = useState(false);
-  const icon = item.getIcon().name;
-  const { description, name, model } = item;
-
-  const defaultedDescription = description || getDefaultDescription(model);
+  const icon =
+    iconForSkeleton ??
+    getIcon({
+      model: item.model,
+      moderated_status: item.moderated_status,
+    }).name;
 
   const maybeEnableTooltip = (
-    event: React.MouseEvent<HTMLDivElement, MouseEvent>,
-    setterFn: React.Dispatch<React.SetStateAction<boolean>>,
+    event: MouseEvent<HTMLDivElement>,
+    setterFn: Dispatch<SetStateAction<boolean>>,
   ) => {
     const target = event.target as HTMLDivElement;
     const isTargetElWiderThanCard = target?.scrollWidth > target?.clientWidth;
@@ -58,51 +104,76 @@ function PinnedItemCard({
     }
   };
 
+  const hasActions =
+    item &&
+    isCollectionItem(item) &&
+    (onCopy || onMove || createBookmark || deleteBookmark || collection);
+
   return (
-    <ItemLink className={className} to={item.getUrl()}>
+    <ItemLink
+      className={className}
+      to={item ? (modelToUrl(item) ?? "/") : undefined}
+      onClick={onClick}
+    >
       <ItemCard flat>
         <Body>
           <Header>
-            <ItemIcon name={icon} />
-            <HoverMenu
-              item={item}
-              collection={collection}
-              onCopy={onCopy}
-              onMove={onMove}
-            />
+            <ItemIcon name={icon as unknown as IconName} />
+            <ActionsContainer h={item ? undefined : "2rem"}>
+              {hasActions && (
+                // This component is used within a `<Link>` component,
+                // so we must prevent events from triggering the activation of the link
+                <EventSandbox preventDefault sandboxedEvents={["onClick"]}>
+                  <ActionMenu
+                    databases={databases}
+                    bookmarks={bookmarks}
+                    createBookmark={createBookmark}
+                    deleteBookmark={deleteBookmark}
+                    item={item}
+                    collection={collection}
+                    onCopy={onCopy}
+                    onMove={onMove}
+                  />
+                </EventSandbox>
+              )}
+            </ActionsContainer>
           </Header>
-          <Tooltip
-            tooltip={name}
-            placement="bottom"
-            maxWidth={TOOLTIP_MAX_WIDTH}
-            isEnabled={showTitleTooltip}
-          >
-            <Title
-              onMouseEnter={e => maybeEnableTooltip(e, setShowTitleTooltip)}
-            >
-              {name}
-            </Title>
-          </Tooltip>
-          <Tooltip
-            tooltip={description}
-            placement="bottom"
-            maxWidth={TOOLTIP_MAX_WIDTH}
-            isEnabled={showDescriptionTooltip}
-          >
-            {defaultedDescription && (
-              <Description
-                onMouseEnter={e =>
-                  maybeEnableTooltip(e, setShowDescriptionTooltip)
-                }
+          {item ? (
+            <>
+              <Tooltip
+                tooltip={item.name}
+                placement="bottom"
+                maxWidth={TOOLTIP_MAX_WIDTH}
+                isEnabled={showTitleTooltip}
               >
-                {defaultedDescription}
+                <Title
+                  onMouseEnter={e => maybeEnableTooltip(e, setShowTitleTooltip)}
+                >
+                  <Flex align="center" gap="0.5rem">
+                    {item.name}
+                    <PLUGIN_MODERATION.ModerationStatusIcon
+                      status={item.moderated_status}
+                      filled
+                      size={14}
+                    />
+                  </Flex>
+                </Title>
+              </Tooltip>
+              <Description tooltipMaxWidth={TOOLTIP_MAX_WIDTH}>
+                {item.description || DEFAULT_DESCRIPTION[item.model] || ""}
               </Description>
-            )}
-          </Tooltip>
+            </>
+          ) : (
+            <>
+              <Skeleton natural h="1.5rem" />
+              <Skeleton natural mt="xs" mb="4px" h="1rem" />
+            </>
+          )}
         </Body>
       </ItemCard>
     </ItemLink>
   );
 }
 
+// eslint-disable-next-line import/no-default-export -- deprecated usage
 export default PinnedItemCard;

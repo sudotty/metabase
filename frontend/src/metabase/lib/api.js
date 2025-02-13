@@ -1,13 +1,14 @@
+import EventEmitter from "events";
 import querystring from "querystring";
 
-import EventEmitter from "events";
-
+import { isTest } from "metabase/env";
+import { isWithinIframe } from "metabase/lib/dom";
 import { delay } from "metabase/lib/promise";
-import { IFRAMED } from "metabase/lib/dom";
 
 const ONE_SECOND = 1000;
 const MAX_RETRIES = 10;
 
+// eslint-disable-next-line no-literal-metabase-strings -- Not a user facing string
 const ANTI_CSRF_HEADER = "X-Metabase-Anti-CSRF-Token";
 
 let ANTI_CSRF_TOKEN = null;
@@ -16,20 +17,29 @@ const DEFAULT_OPTIONS = {
   json: true,
   hasBody: false,
   noEvent: false,
-  transformResponse: o => o,
+  transformResponse: ({ body }) => body,
   raw: {},
   headers: {},
   retry: false,
   retryCount: MAX_RETRIES,
   // Creates an array with exponential backoff in millis
   // i.e. [1000, 2000, 4000, 8000...]
-  retryDelayIntervals: Array.from(new Array(MAX_RETRIES).keys())
-    .map(x => ONE_SECOND * Math.pow(2, x))
-    .reverse(),
+  retryDelayIntervals: new Array(MAX_RETRIES)
+    .fill(1)
+    .map((_, i) => ONE_SECOND * Math.pow(2, i)),
 };
 
 export class Api extends EventEmitter {
   basename = "";
+  apiKey = "";
+  sessionToken;
+
+  onBeforeRequest;
+
+  /**
+   * @type {string|{name: string, version: string}}
+   */
+  requestClient;
 
   GET;
   POST;
@@ -45,6 +55,8 @@ export class Api extends EventEmitter {
   }
 
   _makeMethod(method, creatorOptions = {}) {
+    const self = this;
+
     return (urlTemplate, methodOptions = {}) => {
       if (typeof methodOptions === "function") {
         methodOptions = { transformResponse: methodOptions };
@@ -56,10 +68,14 @@ export class Api extends EventEmitter {
         ...methodOptions,
       };
 
-      return async (data, invocationOptions = {}) => {
+      return async (rawData, invocationOptions = {}) => {
+        if (this.onBeforeRequest) {
+          await this.onBeforeRequest();
+        }
+
         const options = { ...defaultOptions, ...invocationOptions };
         let url = urlTemplate;
-        data = { ...data };
+        const data = { ...rawData };
         for (const tag of url.match(/:\w+/g) || []) {
           const paramName = tag.slice(1);
           let value = data[paramName];
@@ -84,8 +100,36 @@ export class Api extends EventEmitter {
           ? { Accept: "application/json", "Content-Type": "application/json" }
           : {};
 
-        if (IFRAMED) {
+        if (options.formData && options.fetch) {
+          delete headers["Content-Type"];
+        }
+
+        if (this.apiKey) {
+          headers["X-Api-Key"] = this.apiKey;
+        }
+
+        if (this.sessionToken) {
+          // eslint-disable-next-line no-literal-metabase-strings -- Not a user facing string
+          headers["X-Metabase-Session"] = this.sessionToken;
+        }
+
+        if (isWithinIframe()) {
+          // eslint-disable-next-line no-literal-metabase-strings -- Not a user facing string
           headers["X-Metabase-Embedded"] = "true";
+          // eslint-disable-next-line no-literal-metabase-strings -- Not a user facing string
+          headers["X-Metabase-Client"] = "embedding-iframe";
+        }
+
+        if (self.requestClient) {
+          if (typeof self.requestClient === "object") {
+            // eslint-disable-next-line no-literal-metabase-strings -- Not a user facing string
+            headers["X-Metabase-Client"] = self.requestClient.name;
+            // eslint-disable-next-line no-literal-metabase-strings -- Not a user facing string
+            headers["X-Metabase-Client-Version"] = self.requestClient.version;
+          } else {
+            // eslint-disable-next-line no-literal-metabase-strings -- Not a user facing string
+            headers["X-Metabase-Client"] = self.requestClient;
+          }
         }
 
         if (ANTI_CSRF_TOKEN) {
@@ -94,9 +138,13 @@ export class Api extends EventEmitter {
 
         let body;
         if (options.hasBody) {
-          body = JSON.stringify(
-            options.bodyParamName != null ? data[options.bodyParamName] : data,
-          );
+          body = options.formData
+            ? rawData.formData
+            : JSON.stringify(
+                options.bodyParamName != null
+                  ? data[options.bodyParamName]
+                  : data,
+              );
         } else {
           const qs = querystring.stringify(data);
           if (qs) {
@@ -123,8 +171,8 @@ export class Api extends EventEmitter {
   }
 
   async _makeRequestWithRetries(method, url, headers, body, data, options) {
-    // Get a copy of the delay intervals that we can remove items from as we retry
-    const retryDelays = options.retryDelayIntervals.slice();
+    // Get a copy of the delay intervals that we can pop items from as we retry
+    const retryDelays = options.retryDelayIntervals.slice().reverse();
     let retryCount = 0;
     // maxAttempts is the first attempt followed by the number of retries
     const maxAttempts = options.retryCount + 1;
@@ -152,8 +200,18 @@ export class Api extends EventEmitter {
     } while (retryCount < maxAttempts);
   }
 
-  // TODO Atte Keinänen 6/26/17: Replacing this with isomorphic-fetch could simplify the implementation
-  _makeRequest(method, url, headers, body, data, options) {
+  _makeRequest(...args) {
+    const options = args[5];
+    // this is temporary to not deal with failed cypress tests
+    // we should switch to using fetch in all cases (metabase#28489)
+    if (isTest || options.fetch) {
+      return this._makeRequestWithFetch(...args);
+    } else {
+      return this._makeRequestWithXhr(...args);
+    }
+  }
+
+  _makeRequestWithXhr(method, url, headers, body, data, options) {
     return new Promise((resolve, reject) => {
       let isCancelled = false;
       const xhr = new XMLHttpRequest();
@@ -181,7 +239,7 @@ export class Api extends EventEmitter {
           }
           if (status >= 200 && status <= 299) {
             if (options.transformResponse) {
-              body = options.transformResponse(body, { data });
+              body = options.transformResponse({ body, data });
             }
             resolve(body);
           } else {
@@ -206,9 +264,85 @@ export class Api extends EventEmitter {
       }
     });
   }
+
+  async _makeRequestWithFetch(
+    method,
+    url,
+    headers,
+    requestBody,
+    data,
+    options,
+  ) {
+    const controller = options.controller || new AbortController();
+    const signal = options.signal ?? controller.signal;
+    options.cancelled?.then(() => controller.abort());
+
+    const requestUrl = new URL(this.basename + url, location.origin);
+    const request = new Request(requestUrl.href, {
+      method,
+      headers,
+      body: requestBody,
+      signal,
+    });
+
+    return fetch(request)
+      .then(response => {
+        const unreadResponse = response.clone();
+        return response.text().then(body => {
+          if (options.json) {
+            try {
+              body = JSON.parse(body);
+            } catch (e) {}
+          }
+
+          let status = response.status;
+          if (status === 202 && body && body._status > 0) {
+            status = body._status;
+          }
+
+          const token = response.headers.get(ANTI_CSRF_HEADER);
+          if (token) {
+            ANTI_CSRF_TOKEN = token;
+          }
+
+          if (!options.noEvent) {
+            this.emit(status, url);
+          }
+
+          if (status >= 200 && status <= 299) {
+            if (options.transformResponse) {
+              body = options.transformResponse({
+                body,
+                data,
+                response: unreadResponse,
+              });
+            }
+            return body;
+          } else {
+            throw { status: status, data: body };
+          }
+        });
+      })
+      .catch(error => {
+        if (signal.aborted) {
+          throw { isCancelled: true };
+        } else {
+          throw error;
+        }
+      });
+  }
 }
 
 const instance = new Api();
 
 export default instance;
 export const { GET, POST, PUT, DELETE } = instance;
+
+export const setLocaleHeader = locale => {
+  /* `X-Metabase-Locale` is a header that the BE stores as *user* locale for the scope of the request.
+   * We need it to localize downloads. It *currently* only work if there is a user, so it won't work
+   * for public/static embedding.
+   */
+  // eslint-disable-next-line no-literal-metabase-strings -- Header name, not a user facing string
+  DEFAULT_OPTIONS.headers["X-Metabase-Locale"] = locale ?? undefined;
+};

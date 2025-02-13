@@ -1,38 +1,48 @@
 (ns metabase.models.pulse-card
-  (:require [metabase.util :as u]
-            [metabase.util.schema :as su]
-            [schema.core :as s]
-            [toucan.db :as db]
-            [toucan.models :as models]))
+  (:require
+   [metabase.util :as u]
+   [metabase.util.malli :as mu]
+   [metabase.util.malli.schema :as ms]
+   [methodical.core :as methodical]
+   [toucan2.core :as t2]))
 
-(models/defmodel PulseCard :pulse_card)
+(methodical/defmethod t2/table-name :model/PulseCard [_model] :pulse_card)
+
+(doto :model/PulseCard
+  (derive :metabase/model)
+  (derive :hook/entity-id))
 
 (defn next-position-for
   "Return the next available `pulse_card.position` for the given `pulse`"
   [pulse-id]
   {:pre [(integer? pulse-id)]}
-  (-> (db/select-one [PulseCard [:%max.position :max]] :pulse_id pulse-id)
+  (-> (t2/select-one [:model/PulseCard [:%max.position :max]] :pulse_id pulse-id)
       :max
       (some-> inc)
       (or 0)))
 
 (def ^:private NewPulseCard
-  {:card_id                      su/IntGreaterThanZero
-   :pulse_id                     su/IntGreaterThanZero
-   :dashboard_card_id            su/IntGreaterThanZero
-   (s/optional-key :position)    (s/maybe su/NonNegativeInt)
-   (s/optional-key :include_csv) (s/maybe s/Bool)
-   (s/optional-key :include_xls) (s/maybe s/Bool)})
+  [:map {:closed true}
+   [:card_id                            ms/PositiveInt]
+   [:pulse_id                           ms/PositiveInt]
+   [:dashboard_card_id                  ms/PositiveInt]
+   [:position          {:optional true} [:maybe ms/IntGreaterThanOrEqualToZero]]
+   [:include_csv       {:optional true} [:maybe :boolean]]
+   [:include_xls       {:optional true} [:maybe :boolean]]
+   [:format_rows       {:optional true} [:maybe :boolean]]
+   [:pivot_results     {:optional true} [:maybe :boolean]]])
 
-(s/defn bulk-create!
+(mu/defn bulk-create!
   "Creates new PulseCards, joining the given card, pulse, and dashboard card and setting appropriate defaults for other
   values if they're not provided."
-  [new-pulse-cards :- [NewPulseCard]]
-  (db/insert-many! PulseCard
-    (for [{:keys [card_id pulse_id dashboard_card_id position include_csv include_xls]} new-pulse-cards]
-      {:card_id           card_id
-       :pulse_id          pulse_id
-       :dashboard_card_id dashboard_card_id
-       :position          (u/or-with some? position (next-position-for pulse_id))
-       :include_csv       (u/or-with some? include_csv false)
-       :include_xls       (u/or-with some? include_xls false)})))
+  [new-pulse-cards :- [:sequential NewPulseCard]]
+  (t2/insert! :model/PulseCard
+              (for [{:keys [card_id pulse_id dashboard_card_id position include_csv include_xls format_rows pivot_results]} new-pulse-cards]
+                {:card_id           card_id
+                 :pulse_id          pulse_id
+                 :dashboard_card_id dashboard_card_id
+                 :position          (u/or-with some? position (next-position-for pulse_id))
+                 :include_csv       (boolean include_csv)
+                 :include_xls       (boolean include_xls)
+                 :format_rows       (boolean format_rows)
+                 :pivot_results     (boolean pivot_results)})))

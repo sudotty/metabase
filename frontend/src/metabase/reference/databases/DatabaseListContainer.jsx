@@ -1,13 +1,14 @@
 /* eslint "react/prop-types": "warn" */
-import React, { Component } from "react";
+import cx from "classnames";
 import PropTypes from "prop-types";
-import { connect } from "react-redux";
+import { Component } from "react";
 
-import BaseSidebar from "metabase/reference/guide/BaseSidebar";
 import SidebarLayout from "metabase/components/SidebarLayout";
-import DatabaseList from "metabase/reference/databases/DatabaseList";
-
+import CS from "metabase/css/core/index.css";
+import { connect } from "metabase/lib/redux";
 import * as metadataActions from "metabase/redux/metadata";
+import DatabaseList from "metabase/reference/databases/DatabaseList";
+import BaseSidebar from "metabase/reference/guide/BaseSidebar";
 import * as actions from "metabase/reference/reference";
 
 import { getDatabaseId, getIsEditing } from "../selectors";
@@ -22,8 +23,7 @@ const mapDispatchToProps = {
   ...actions,
 };
 
-@connect(mapStateToProps, mapDispatchToProps)
-export default class DatabaseListContainer extends Component {
+class DatabaseListContainer extends Component {
   static propTypes = {
     params: PropTypes.object.isRequired,
     databaseId: PropTypes.number.isRequired,
@@ -52,7 +52,7 @@ export default class DatabaseListContainer extends Component {
 
     return (
       <SidebarLayout
-        className="flex-full relative"
+        className={cx(CS.flexFull, CS.relative)}
         style={isEditing ? { paddingTop: "43px" } : {}}
         sidebar={<BaseSidebar />}
       >
@@ -61,3 +61,8 @@ export default class DatabaseListContainer extends Component {
     );
   }
 }
+
+export default connect(
+  mapStateToProps,
+  mapDispatchToProps,
+)(DatabaseListContainer);

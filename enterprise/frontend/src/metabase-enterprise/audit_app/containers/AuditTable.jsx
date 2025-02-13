@@ -1,21 +1,22 @@
-import React, { useState } from "react";
-import PropTypes from "prop-types";
-import _ from "underscore";
+import "../components/AuditTableVisualization";
+
 import { chain } from "icepick";
-import { connect } from "react-redux";
+import PropTypes from "prop-types";
+import { useState } from "react";
 import { push } from "react-router-redux";
+import _ from "underscore";
 
-import PaginationControls from "metabase/components/PaginationControls";
-
-import Question from "metabase-lib/lib/Question";
-
-import { getMetadata } from "metabase/selectors/metadata";
+import { PaginationControls } from "metabase/components/PaginationControls";
+import CS from "metabase/css/core/index.css";
 import { usePagination } from "metabase/hooks/use-pagination";
+import { connect } from "metabase/lib/redux";
+import { getMetadata } from "metabase/selectors/metadata";
+import Question from "metabase-lib/v1/Question";
 
 import { AuditMode } from "../lib/mode";
-import QuestionLoadAndDisplay from "./QuestionLoadAndDisplay";
-import "./AuditTableVisualization";
+
 import { PaginationControlsContainer } from "./AuditTable.styled";
+import QuestionLoadAndDisplay from "./QuestionLoadAndDisplay";
 
 const mapStateToProps = state => ({
   metadata: getMetadata(state),
@@ -52,7 +53,7 @@ function AuditTable({
 
   const handleOnLoad = results => {
     setLoadedCount(results[0].row_count);
-    onLoad(results);
+    onLoad?.(results);
   };
 
   const card = chain(table.card)
@@ -69,7 +70,7 @@ function AuditTable({
     <div>
       <QuestionLoadAndDisplay
         keepPreviousWhileLoading
-        className="mt3"
+        className={CS.mt3}
         question={question}
         metadata={metadata}
         mode={mode}

@@ -1,179 +1,105 @@
 (ns metabase.test-runner
-  "Simple wrapper to let us use eftest with the Clojure CLI. Pass `:only` to specify where to look for tests (see dox
-  for [[find-tests]] for more info.)"
-  (:require [clojure.java.classpath :as classpath]
-            [clojure.java.io :as io]
-            [clojure.pprint :as pprint]
-            [clojure.test :as t]
-            [clojure.tools.namespace.find :as ns-find]
-            eftest.report.pretty
-            eftest.report.progress
-            eftest.runner
-            [environ.core :as env]
-            [metabase.config :as config]
-            [metabase.test-runner.assert-exprs :as assert-exprs]
-            [metabase.test-runner.init :as init]
-            [metabase.test-runner.junit :as junit]
-            [metabase.test-runner.parallel :as parallel]
-            [metabase.test.data.env :as tx.env]
-            metabase.test.redefs
-            [metabase.util.date-2 :as date-2]
-            [metabase.util.i18n.impl :as i18n.impl]
-            [pjstadig.humane-test-output :as humane-test-output]))
+  "The only purpose of this namespace is to make sure all of the other stuff below gets loaded."
+  (:require
+   [clojure.java.classpath :as classpath]
+   [clojure.java.io :as io]
+   [clojure.set :as set]
+   [clojure.string :as str]
+   [humane-are.core :as humane-are]
+   [mb.hawk.core :as hawk]
+   [metabase.config :as config]
+   [metabase.core.bootstrap]
+   [metabase.test-runner.assert-exprs]
+   [metabase.test.data.env :as tx.env]
+   [metabase.util.date-2]
+   [metabase.util.i18n.impl]
+   [pjstadig.humane-test-output :as humane-test-output]))
 
-;; initialize Humane Test Output if it's not already initialized.
-(humane-test-output/activate!)
+(set! *warn-on-reflection* true)
 
-;; Load redefinitions of stuff like `tt/with-temp` and `with-redefs` that throw an Exception when they are used inside
-;; parallel tests.
-(comment metabase.test.redefs/keep-me
-         assert-exprs/keep-me
-         ;; these are necessary so data_readers.clj functions can function
-         date-2/keep-me
-         i18n.impl/keep-me)
+;;; TODO -- consider whether we should just mode all of this stuff to [[user]] instead of doing it here
 
-;; Disable parallel tests with `PARALLEL=false`
-(def ^:private enable-parallel-tests?
-  (if-let [^String s (env/env :parallel)]
-    (Boolean/parseBoolean s)
-    true))
+(comment
+  metabase.core.bootstrap/keep-me
+  ;; make sure stuff like `=?` and what not are loaded
+  metabase.test-runner.assert-exprs/keep-me
 
-;;;; Finding tests
+  ;; these are necessary so data_readers.clj functions can function
+  metabase.util.date-2/keep-me
+  metabase.util.i18n.impl/keep-me)
 
-(defmulti find-tests
-  "Find test vars in `arg`, which can be a string directory name, symbol naming a specific namespace or test, or a
-  collection of one or more of the above."
-  {:arglists '([arg])}
-  type)
+;; Initialize Humane Test Output if it's not already initialized. Don't enable humane-test-output when running tests
+;; from the CLI, it breaks diffs.
+(when-not config/is-test?
+  (humane-test-output/activate!))
 
-;; collection of one of the things below
-(defmethod find-tests clojure.lang.Sequential
-  [coll]
-  (mapcat find-tests coll))
+;;; Same for https://github.com/camsaul/humane-are
+(humane-are/install!)
 
-;; directory name
-(defmethod find-tests String
-  [dir-name]
-  (find-tests (io/file dir-name)))
+;;; Ignore any directories for drivers that are not in the [[tx.env/test-drivers]] (i.e., not in `DRIVERS`)
+;;;
+;;; I supposed we COULD do this by dynamically generating `:exclude-directories` but it ends up being a pretty big list
+;;; since we have to include `src`, `test`, `resources`, `resources-ee`; with both relative and absolute versions (since
+;;; `:drivers` adds the deps as `:local/root` deps they're added to the classpath as absolute paths) -- this is
+;;; ultimately easier and less noisy.
+
+(defn- all-drivers []
+  (into #{:h2 :postgres :mysql}
+        (for [^java.io.File file (.listFiles (io/file "modules/drivers"))
+              :when              (.isDirectory file)]
+          (keyword (.getName file)))))
+
+(defn- excluded-drivers []
+  (set/difference (all-drivers) (tx.env/test-drivers)))
+
+;;; replace the default method that finds all tests on the classpath with one that ignores driver directories
+(defmethod hawk/find-tests nil
+  [_nil options]
+  (let [excluded-driver-dirs (for [driver (excluded-drivers)]
+                               (format "modules/drivers/%s" (name driver)))
+        exclude-directory?   (fn [dir]
+                               (let [dir (str dir)]
+                                 (some (fn [excluded]
+                                         (or (str/ends-with? dir excluded)
+                                             (str/includes? dir (str excluded "/"))))
+                                       excluded-driver-dirs)))
+        directories          (for [^java.io.File file (classpath/system-classpath)
+                                   :when              (and (.isDirectory file)
+                                                           (not (exclude-directory? file)))]
+                               file)]
+    (hawk/find-tests directories options)))
 
 (def ^:private excluded-directories
-  "When searching the classpath for tests (i.e., if no `:only` options were passed), don't look for tests in any
-  directories with these name (as the last path component)."
-  #{"src"
-    "test_config"
-    "resources"
-    "test_resources"
-    "resources-ee"
-    "classes"})
+  [".clj-kondo/src"
+   "classes"
+   "dev"
+   "enterprise/backend/src"
+   "local"
+   "resources"
+   "resources-ee"
+   "src"
+   "target"
+   "test_config"
+   "test_resources"])
 
-;; directory
-(defmethod find-tests java.io.File
-  [^java.io.File file]
-  (when (and (.isDirectory file)
-             (not (some (partial = (.getName file)) excluded-directories))
-             (if-let [[_ driver] (re-find #"modules/drivers/([^/]+)/" (str file))]
-               (contains? (tx.env/test-drivers) (keyword driver))
-               true))
-    (println "Looking for test namespaces in directory" (str file))
-    (->> (ns-find/find-namespaces-in-dir file)
-         (filter #(re-matches  #"^metabase.*test$" (name %)))
-         (mapcat find-tests))))
+(defn- default-options []
+  {:namespace-pattern   #"^(?:(?:metabase.*)|(?:hooks\..*))" ; anything starting with `metabase*` (including `metabase-enterprise`) or `hooks.*`
+   :exclude-directories excluded-directories
+   :test-warn-time      3000})
 
-;; a test namespace or individual test
-(defmethod find-tests clojure.lang.Symbol
-  [symb]
-  (letfn [(load-test-namespace [ns-symb]
-            (binding [init/*test-namespace-being-loaded* ns-symb]
-              (require ns-symb)))]
-    (if-let [symbol-namespace (some-> (namespace symb) symbol)]
-      ;; a actual test var e.g. `metabase.whatever-test/my-test`
-      (do
-        (load-test-namespace symbol-namespace)
-        [(resolve symb)])
-      ;; a namespace e.g. `metabase.whatever-test`
-      (do
-        (load-test-namespace symb)
-        (eftest.runner/find-tests symb)))))
+(defn find-tests
+  "Find all tests, in case you wish to run them yourself."
+  ([]
+   (find-tests {}))
+  ([options]
+   (hawk/find-tests-with-options (merge (default-options) options))))
 
-;; default -- look in all dirs on the classpath
-(defmethod find-tests nil
-  [_]
-  (find-tests (classpath/system-classpath)))
-
-(defn tests [{:keys [only]}]
-  (when only
-    (println "Running tests in" (pr-str only)))
-  (let [tests (find-tests only)]
-    (println "Running" (count tests) "tests")
-    tests))
-
-;;;; Running tests & reporting the output
-
-(defonce ^:private orig-test-var t/test-var)
-
-(def ^:private ^:dynamic *parallel-test-counter*
-  nil)
-
-(defn run-test
-  "Run a single test `test-var`. Wraps/replaces [[clojure.test/test-var]]."
-  [test-var]
-  (binding [parallel/*parallel?* (parallel/parallel? test-var)]
-    (some-> *parallel-test-counter* (swap! update
-                                           (if (and parallel/*parallel?* enable-parallel-tests?)
-                                             :parallel
-                                             :single-threaded)
-                                           (fnil inc 0)))
-    (orig-test-var test-var)))
-
-(alter-var-root #'t/test-var (constantly run-test))
-
-(defn- reporter
-  "Create a new test reporter/event handler, a function with the signature `(handle-event event)` that gets called once
-  for every [[clojure.test]] event, including stuff like `:begin-test-run`, `:end-test-var`, and `:fail`."
-  []
-  (let [stdout-reporter (if (or (env/env :ci) config/is-dev?)
-                          eftest.report.pretty/report
-                          eftest.report.progress/report)]
-    (fn handle-event [event]
-      (junit/handle-event! event)
-      (stdout-reporter event))))
-
-(defn run
-  "Run `test-vars` with `options`, which are passed directly to [[eftest.runner/run-tests]].
-
-    ;; run tests in a single namespace
-    (run (find-tests 'metabase.bad-test))
-
-    ;; run tests in a directory
-    (run (find-tests \"test/metabase/query_processor_test\"))"
-  ([test-vars]
-   (run test-vars nil))
-
-  ([test-vars options]
-   ;; don't randomize test order for now please, thanks anyway
-   (with-redefs [eftest.runner/deterministic-shuffle (fn [_ test-vars] test-vars)]
-     (binding [*parallel-test-counter* (atom {})]
-       (merge
-        (eftest.runner/run-tests
-         test-vars
-         (merge
-          {:capture-output? false
-           :multithread?    (when enable-parallel-tests? :vars)
-           :report          (reporter)}
-          options))
-        @*parallel-test-counter*)))))
-
-;;;; `clojure -X` entrypoint
-
-(defn run-tests
-  "`clojure -X` entrypoint for the test runner. `options` are passed directly to `eftest`; see
-  https://github.com/weavejester/eftest for full list of options.
-
-  To use our test runner from the REPL, use [[run]] instead."
+(defn find-and-run-tests-repl
+  "Find and run tests from the REPL."
   [options]
-  (let [summary (run (tests options) options)
-        fail?   (pos? (+ (:error summary) (:fail summary)))]
-    (pprint/pprint summary)
-    (printf "Ran %d tests in parallel, %d single-threaded.\n" (:parallel summary 0) (:single-threaded summary 0))
-    (println (if fail? "Tests failed." "All tests passed."))
-    (System/exit (if fail? 1 0))))
+  (hawk/find-and-run-tests-repl (merge (default-options) options)))
+
+(defn find-and-run-tests-cli
+  "Entrypoint for `clojure -X:test`."
+  [options]
+  (hawk/find-and-run-tests-cli (merge (default-options) options)))

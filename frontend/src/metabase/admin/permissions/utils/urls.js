@@ -1,7 +1,7 @@
 import {
-  isTableEntityId,
-  isSchemaEntityId,
   isDatabaseEntityId,
+  isSchemaEntityId,
+  isTableEntityId,
 } from "./data-entity-id";
 
 export const DATABASES_BASE_PATH = `/admin/permissions/data/database`;
@@ -14,12 +14,18 @@ export const getDatabaseFocusPermissionsUrl = entityId => {
 
   if (isTableEntityId(entityId)) {
     return entityId.schemaName != null
-      ? `${DATABASES_BASE_PATH}/${entityId.databaseId}/schema/${entityId.schemaName}/table/${entityId.tableId}`
+      ? `${DATABASES_BASE_PATH}/${
+          entityId.databaseId
+        }/schema/${encodeURIComponent(entityId.schemaName)}/table/${
+          entityId.tableId
+        }`
       : `${DATABASES_BASE_PATH}/${entityId.databaseId}/table/${entityId.tableId}`;
   }
 
   if (isSchemaEntityId(entityId)) {
-    return `${DATABASES_BASE_PATH}/${entityId.databaseId}/schema/${entityId.schemaName}`;
+    return `${DATABASES_BASE_PATH}/${
+      entityId.databaseId
+    }/schema/${encodeURIComponent(entityId.schemaName)}`;
   }
 
   if (isDatabaseEntityId(entityId)) {
@@ -41,6 +47,10 @@ export const getGroupFocusPermissionsUrl = (groupId, entityId) => {
   }
 
   if (isSchemaEntityId(entityId)) {
-    return `${GROUPS_BASE_PATH}/${groupId}/database/${entityId.databaseId}/schema/${entityId.schemaName}`;
+    return `${GROUPS_BASE_PATH}/${groupId}/database/${
+      entityId.databaseId
+    }/schema/${encodeURIComponent(entityId.schemaName)}`;
   }
+
+  return GROUPS_BASE_PATH;
 };

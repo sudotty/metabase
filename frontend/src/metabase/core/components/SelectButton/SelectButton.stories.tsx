@@ -1,31 +1,44 @@
-import React from "react";
-import { ComponentStory } from "@storybook/react";
-import SelectButton from "./SelectButton";
+import type { StoryFn } from "@storybook/react";
+
+import SelectButton, { type SelectButtonProps } from "./SelectButton";
 
 export default {
   title: "Core/SelectButton",
   component: SelectButton,
 };
 
-const Template: ComponentStory<typeof SelectButton> = args => {
+const Template: StoryFn<SelectButtonProps> = args => {
   return <SelectButton {...args} />;
 };
 
-export const Default = Template.bind({});
+export const Default = {
+  render: Template,
 
-Default.args = {
-  children: "Select an option",
-  hasValue: false,
-  fullWidth: false,
+  args: {
+    children: "Select an option",
+    hasValue: false,
+    fullWidth: false,
+  },
 };
 
-export const WithClearBehavior = Template.bind({});
+export const Highlighted = {
+  render: Template,
 
-WithClearBehavior.args = {
-  children: "Some value is selected",
-  hasValue: true,
-  onClear: () => {
-    return;
+  args: {
+    children: "Select an option",
+    hasValue: true,
+    fullWidth: false,
+    highlighted: true,
   },
-  fullWidth: false,
+};
+
+export const WithClearBehavior = {
+  render: Template,
+
+  args: {
+    children: "Some value is selected",
+    hasValue: true,
+    fullWidth: false,
+    onClear: () => null,
+  },
 };

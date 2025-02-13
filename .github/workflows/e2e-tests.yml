@@ -1,14 +1,57 @@
 name: E2E Tests
 
 on:
-  push:
-    branches:
-      - 'master'
+  workflow_call:
+    inputs:
+      skip:
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}-e2e
+  cancel-in-progress: true
 
 jobs:
+  e2e-matrix-builder:
+    uses: ./.github/workflows/e2e-matrix-builder.yml
+    with:
+      chunks: 50
+
+  # if this is a test on a release branch, we need to check the build requirements
+  get-build-requirements:
+    if: |
+      !cancelled() &&
+      contains(github.ref, 'release-x')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    outputs:
+      java_version: ${{ fromJson(steps.dependencies.outputs.result).java_version }}
+      node_version: ${{ fromJson(steps.dependencies.outputs.result).node_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: release
+      - name: Prepare build scripts
+        run: cd ${{ github.workspace }}/release && yarn && yarn build
+      - name: Get build dependencies
+        uses: actions/github-script@v7
+        id: dependencies
+        with:
+          script: | # js
+            const { getBuildRequirements, getVersionFromReleaseBranch } = require('${{ github.workspace }}/release/dist/index.cjs');
+
+            const version = getVersionFromReleaseBranch('${{ github.ref }}');
+            const requirements = getBuildRequirements(version);
+
+            return {
+              java_version: requirements.java,
+              node_version: requirements.node,
+            };
 
   build:
-    runs-on: buildjet-2vcpu-ubuntu-2004
+    needs: [get-build-requirements]
+    if: ${{ !cancelled() && !inputs.skip }}
+    runs-on: ubuntu-22.04
     timeout-minutes: 25
     strategy:
       matrix:
@@ -16,129 +59,124 @@ jobs:
     env:
       MB_EDITION: ${{ matrix.edition }}
       INTERACTIVE: false
+      # make sure that builds on release branches get licenses, because we use them for releases
+      SKIP_LICENSES: ${{ github.event_name == 'pull_request' }}
     steps:
-    - uses: actions/checkout@v2
-    - name: Prepare front-end environment
-      uses: ./.github/actions/prepare-frontend
-    - name: Prepare back-end environment
-      uses: ./.github/actions/prepare-backend
+      - uses: actions/checkout@v4
+      - name: Prepare front-end environment
+        uses: ./.github/actions/prepare-frontend
+        with:
+          node-version: "${{ needs.get-build-requirements.outputs.node_version }}"
+      - name: Prepare back-end environment
+        uses: ./.github/actions/prepare-backend
+        with:
+          m2-cache-key: uberjar
+          java-version: "${{ needs.get-build-requirements.outputs.java_version || 21 }}"
 
-    - name: Java/AOT prep
-      run: |
-        source "./bin/prep.sh"
-        prep_deps
+      - name: Build uberjar with ./bin/build.sh
+        run: ./bin/build.sh
 
-    - run: ./bin/build version
-    - run: ./bin/build translations
-    - run: ./bin/build frontend
-    - run: ./bin/build licenses
-    - run: ./bin/build drivers
-    - run: ./bin/build uberjar
+      - name: Prepare uberjar artifact
+        uses: ./.github/actions/prepare-uberjar-artifact
+        with:
+          name: metabase-${{ matrix.edition }}-${{ github.event.pull_request.head.sha || github.sha }}-uberjar
 
-    - name: Mark with the commit hash
-      run:  git rev-parse --short HEAD > COMMIT-ID
-    - name: Calculate SHA256 checksum
-      run: sha256sum ./target/uberjar/metabase.jar > SHA256.sum
-    - name: Upload JARs as artifact
-      uses: actions/upload-artifact@v2
-      with:
-        name: metabase-${{ matrix.edition }}-uberjar
-        path: |
-          ./target/uberjar/metabase.jar
-          ./COMMIT-ID
-          ./SHA256.sum
+  reset-e2e-test-comment:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Remove test results comment
+        uses: actions/github-script@v7
+        with:
+          script: | # js
+            const { owner, repo } = context.repo;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number: context.issue.number,
+            }).catch(console.error);
+
+            if (!comments) {
+              return;
+            }
+
+            const comment = comments.find((comment) => comment.body.includes('## e2e tests failed on '));
+
+            if (comment) {
+              await github.rest.issues.deleteComment({
+                owner,
+                repo,
+                comment_id: comment.id,
+              });
+            }
 
   e2e-tests:
-    runs-on: buildjet-2vcpu-ubuntu-2004
-    timeout-minutes: 20
-    needs: build
-    name: e2e-tests-${{ matrix.folder }}-${{ matrix.edition }}
-    env:
-      MB_EDITION: ${{ matrix.edition }}
-      DISPLAY: ""
-      QA_DB_ENABLED: true
-      ENTERPRISE_TOKEN: ${{ secrets.ENTERPRISE_TOKEN }}
+    name: ${{ matrix.name }}-${{ matrix.edition }}
+    uses: ./.github/workflows/e2e-test.yml
+    needs:
+      - e2e-matrix-builder
+      - build
+    if: |
+      !cancelled() && needs.build.result == 'success'
     strategy:
       fail-fast: false
-      matrix:
-        edition: [oss, ee]
-        folder:
-          - "custom-column"
-          - "dashboard"
-          - "dashboard-filters"
-          - "dashboard-filters-sql"
-          - "downloads"
-          - "moderation"
-          - "native"
-          - "permissions"
-          - "sharing"
-          - "smoketest"
-    services:
-      maildev:
-        image: maildev/maildev
-        ports:
-          - "80:80"
-          - "25:25"
-        credentials:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      postgres-sample:
-        image: metabase/qa-databases:postgres-sample-12
-        ports:
-          - "5432:5432"
-        credentials:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      mongo-sample:
-        image: metabase/qa-databases:mongo-sample-4.0
-        ports:
-          - 27017:27017
-        credentials:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      mysql-sample:
-        image: metabase/qa-databases:mysql-sample-8
-        ports:
-          - 3306:3306
-        credentials:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      matrix: ${{ fromJson(needs.e2e-matrix-builder.outputs.matrix) }}
+    secrets: inherit
+    with:
+      name: ${{ matrix.name }}
+      edition: ${{ matrix.edition }}
+      specs: ${{ matrix.specs }}
+      total_chunks: ${{ fromJson(needs.e2e-matrix-builder.outputs.regularChunks) }}
+      split_index: ${{ strategy.job-index }}
+      tags: ${{ matrix.tags }}
+      runner: ${{ matrix.runner }}
+
+  # run this separately to make it non-blocking
+  flaky-e2e-tests:
+    name: Flaky e2e Tests
+    uses: ./.github/workflows/e2e-test.yml
+    needs: build
+    if: |
+      !cancelled() && needs.build.result == 'success'
+    secrets: inherit
+    with:
+      name: Flaky
+      tags: "@flaky"
+      specs: "./e2e/test/scenarios/**/*.cy.spec.*"
+
+  e2e-tests-result:
+    needs:
+     - e2e-tests
+     - flaky-e2e-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    name: e2e-tests-result
+    if: always() && !cancelled()
+    env:
+      E2E_TESTS_RESULT: ${{ needs.e2e-tests.result }}
+      FLAKY_E2E_TESTS_RESULT: ${{ needs.flaky-e2e-tests.result }}
     steps:
-    - uses: actions/checkout@v2
-    - name: Prepare front-end environment
-      uses: ./.github/actions/prepare-frontend
-    - name: Prepare back-end environment
-      uses: ./.github/actions/prepare-backend
+      - name: Stub
+        if: ${{ needs.e2e-tests.result == 'skipped' }}
+        run: |
+          echo "Didn't run due to conditional filtering"
+      - name: Test results
+        if: ${{ needs.e2e-tests.result != 'skipped' }}
+        run: | # sh
+          echo "E2E Tests: ${{ needs.e2e-tests.result }}"
+          echo "Flaky E2E Tests: ${{ needs.flaky-e2e-tests.result }}"
 
-    - name: Get Cypress cache
-      uses: actions/cache@v2
-      with:
-        path: ~/.cache/Cypress
-        key: ${{ runner.os }}-Cypress-${{ hashFiles('**/yarn.lock') }}
-    - name: Ensure that Cypress executable is ready
-      run: |
-        yarn cypress install
-        yarn cypress cache path
-        yarn cypress cache list
-        yarn cypress verify
+          if [ "${{ needs.e2e-tests.result }}" != "success" ]; then
+            echo "E2E Tests failed"
+            exit 1
+          fi
 
-    - uses: actions/download-artifact@v2
-      name: Retrieve uberjar artifact for ${{ matrix.edition }}
-      with:
-        name: metabase-${{ matrix.edition }}-uberjar
-    - name: Get the version info
-      run: |
-        jar xf target/uberjar/metabase.jar version.properties
-        mv version.properties resources/
-
-    - run: yarn run test-cypress-no-build --folder ${{ matrix.folder }}
-      name: Run Cypress tests on ${{ matrix.folder }}
-      env:
-        TERM: xterm
-    - name: Upload Cypress recording upon failure
-      uses: actions/upload-artifact@v2
-      if: failure()
-      with:
-        name: cypress-recording-${{ matrix.folder }}-${{ matrix.edition }}
-        path: ./cypress
-        if-no-files-found: ignore
+  pr-env:
+    needs: [build]
+    if: |
+      !cancelled() &&
+      contains(github.event.pull_request.labels.*.name, 'PR-Env')
+    uses: ./.github/workflows/pr-env.yml
+    secrets: inherit

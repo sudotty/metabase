@@ -1,14 +1,17 @@
 import { assocIn } from "icepick";
 
-import * as MetabaseAnalytics from "metabase/lib/analytics";
+import {
+  sessionApi,
+  skipToken,
+  useGetUserQuery,
+  useListUserRecipientsQuery,
+  useListUsersQuery,
+  userApi,
+} from "metabase/api";
+import { createEntity, entityCompatibleQuery } from "metabase/lib/entities";
+import { generatePassword } from "metabase/lib/security";
 import MetabaseSettings from "metabase/lib/settings";
-import MetabaseUtils from "metabase/lib/utils";
-
-import { createEntity } from "metabase/lib/entities";
-
-import { UserApi, SessionApi } from "metabase/services";
-
-import forms from "./users/forms";
+import { UserSchema } from "metabase/schema";
 
 export const DEACTIVATE = "metabase/entities/users/DEACTIVATE";
 export const REACTIVATE = "metabase/entities/users/REACTIVATE";
@@ -16,21 +19,64 @@ export const PASSWORD_RESET_EMAIL =
   "metabase/entities/users/PASSWORD_RESET_EMAIL";
 export const PASSWORD_RESET_MANUAL =
   "metabase/entities/users/RESET_PASSWORD_MANUAL";
-export const RESEND_INVITE = "metabase/entities/users/RESEND_INVITE";
 
 // TODO: It'd be nice to import loadMemberships, but we need to resolve a circular dependency
 function loadMemberships() {
   return require("metabase/admin/people/people").loadMemberships();
 }
 
+const getUserList = (query = {}, dispatch) =>
+  entityCompatibleQuery(query, dispatch, userApi.endpoints.listUsers);
+const getRecipientsList = (query = {}, dispatch) =>
+  entityCompatibleQuery(query, dispatch, userApi.endpoints.listUserRecipients);
+
+/**
+ * @deprecated use "metabase/api" instead
+ */
 const Users = createEntity({
   name: "users",
   nameOne: "user",
+  schema: UserSchema,
 
   path: "/api/user",
 
+  rtk: {
+    getUseGetQuery: () => ({
+      useGetQuery,
+    }),
+    useListQuery,
+  },
+
+  api: {
+    list: ({ recipients = false, ...args }, dispatch) =>
+      recipients
+        ? getRecipientsList({}, dispatch)
+        : getUserList(args, dispatch),
+    create: (entityQuery, dispatch) =>
+      entityCompatibleQuery(
+        entityQuery,
+        dispatch,
+        userApi.endpoints.createUser,
+      ),
+    get: (entityQuery, options, dispatch) =>
+      entityCompatibleQuery(
+        entityQuery.id,
+        dispatch,
+        userApi.endpoints.getUser,
+      ),
+    update: (entityQuery, dispatch) =>
+      entityCompatibleQuery(
+        entityQuery,
+        dispatch,
+        userApi.endpoints.updateUser,
+      ),
+    delete: () => {
+      throw new TypeError("Users.api.delete is not supported");
+    },
+  },
+
   objectSelectors: {
-    getName: user => user.common_name || `${user.first_name} ${user.last_name}`,
+    getName: user => user.common_name,
   },
 
   actionTypes: {
@@ -38,7 +84,6 @@ const Users = createEntity({
     REACTIVATE,
     PASSWORD_RESET_EMAIL,
     PASSWORD_RESET_MANUAL,
-    RESEND_INVITE,
   },
 
   actionDecorators: {
@@ -46,7 +91,7 @@ const Users = createEntity({
       if (!MetabaseSettings.isEmailConfigured()) {
         user = {
           ...user,
-          password: MetabaseUtils.generatePassword(),
+          password: generatePassword(),
         };
       }
       const result = await thunkCreator(user)(dispatch, getState);
@@ -61,7 +106,7 @@ const Users = createEntity({
     },
     update: thunkCreator => user => async (dispatch, getState) => {
       const result = await thunkCreator(user)(dispatch, getState);
-      if (user.group_ids) {
+      if (user.user_group_memberships) {
         // group ids were just updated
         dispatch(loadMemberships());
       }
@@ -70,56 +115,78 @@ const Users = createEntity({
   },
 
   objectActions: {
-    resentInvite: async ({ id }) => {
-      MetabaseAnalytics.trackStructEvent("People Admin", "Resent Invite");
-      await UserApi.send_invite({ id });
-      return { type: RESEND_INVITE };
-    },
-    passwordResetEmail: async ({ email }) => {
-      MetabaseAnalytics.trackStructEvent(
-        "People Admin",
-        "Trigger User Password Reset",
-      );
-      await SessionApi.forgot_password({ email });
-      return { type: PASSWORD_RESET_EMAIL };
-    },
-    passwordResetManual: async (
-      { id },
-      password = MetabaseUtils.generatePassword(),
-    ) => {
-      MetabaseAnalytics.trackStructEvent(
-        "People Admin",
-        "Manual Password Reset",
-      );
-      await UserApi.update_password({ id, password });
-      return { type: PASSWORD_RESET_MANUAL, payload: { id, password } };
-    },
-    deactivate: async ({ id }) => {
-      MetabaseAnalytics.trackStructEvent("People Admin", "User Removed");
-      // TODO: move these APIs from services to this file
-      await UserApi.delete({ userId: id });
-      return { type: DEACTIVATE, payload: { id } };
-    },
-    reactivate: async ({ id }) => {
-      MetabaseAnalytics.trackStructEvent("People Admin", "User Reactivated");
-      // TODO: move these APIs from services to this file
-      const user = await UserApi.reactivate({ userId: id });
-      return { type: REACTIVATE, payload: user };
-    },
+    resetPasswordEmail:
+      ({ email }) =>
+      async dispatch => {
+        await entityCompatibleQuery(
+          email,
+          dispatch,
+          sessionApi.endpoints.forgotPassword,
+        );
+        dispatch({ type: PASSWORD_RESET_EMAIL });
+      },
+    resetPasswordManual:
+      async ({ id }, password = generatePassword()) =>
+      async dispatch => {
+        await entityCompatibleQuery(
+          { id, password },
+          dispatch,
+          userApi.endpoints.updatePassword,
+        );
+        dispatch({ type: PASSWORD_RESET_MANUAL, payload: { id, password } });
+      },
+    deactivate:
+      ({ id }) =>
+      async dispatch => {
+        await entityCompatibleQuery(
+          id,
+          dispatch,
+          userApi.endpoints.deactivateUser,
+        );
+        dispatch({ type: DEACTIVATE, payload: { id } });
+      },
+    reactivate:
+      ({ id }) =>
+      async dispatch => {
+        const user = await entityCompatibleQuery(
+          id,
+          dispatch,
+          userApi.endpoints.reactivateUser,
+        );
+        dispatch({ type: REACTIVATE, payload: user });
+      },
   },
 
   reducer: (state = {}, { type, payload, error }) => {
-    if (type === DEACTIVATE && !error) {
-      return assocIn(state, [payload.id, "is_active"], false);
-    } else if (type === REACTIVATE && !error) {
-      return assocIn(state, [payload.id, "is_active"], true);
-    } else if (type === PASSWORD_RESET_MANUAL && !error) {
-      return assocIn(state, [payload.id, "password"], payload.password);
+    if (error) {
+      return state;
     }
-    return state;
+    switch (type) {
+      case DEACTIVATE:
+        return assocIn(state, [payload.id, "is_active"], false);
+      case REACTIVATE:
+        return assocIn(state, [payload.id, "is_active"], true);
+      case PASSWORD_RESET_MANUAL:
+        return assocIn(state, [payload.id, "password"], payload.password);
+      default:
+        return state;
+    }
   },
-
-  forms,
 });
+
+const useGetQuery = ({ id }, options) => {
+  return useGetUserQuery(id, options);
+};
+
+function useListQuery({ recipients = false, ...args } = {}, options) {
+  const usersList = useListUsersQuery(recipients ? skipToken : args, options);
+
+  const recipientsList = useListUserRecipientsQuery(
+    recipients ? args : skipToken,
+    options,
+  );
+
+  return recipients ? recipientsList : usersList;
+}
 
 export default Users;

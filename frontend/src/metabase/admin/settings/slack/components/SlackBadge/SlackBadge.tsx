@@ -1,6 +1,6 @@
-import React from "react";
 import { t } from "ttag";
-import { BadgeRoot, BadgeIcon, BadgeText } from "./SlackBadge.styled";
+
+import { BadgeIcon, BadgeRoot, BadgeText } from "./SlackBadge.styled";
 
 export interface SlackBadgeProps {
   isBot?: boolean;
@@ -24,4 +24,5 @@ const getMessage = (isBot?: boolean, isValid?: boolean): string => {
   }
 };
 
+// eslint-disable-next-line import/no-default-export -- deprecated usage
 export default SlackBadge;

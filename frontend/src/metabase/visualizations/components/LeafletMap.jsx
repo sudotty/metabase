@@ -1,24 +1,21 @@
 /* eslint-disable react/prop-types */
-import React, { Component } from "react";
-
-import MetabaseSettings from "metabase/lib/settings";
-
+import "leaflet-draw";
 import "leaflet/dist/leaflet.css";
-import "./LeafletMap.css";
+import "./LeafletMap.module.css";
 
 import L from "leaflet";
-import "leaflet-draw";
-
+import { Component, createRef } from "react";
 import _ from "underscore";
 
-import Question from "metabase-lib/lib/Question";
-import { updateLatLonFilter } from "metabase/modes/lib/actions";
+import MetabaseSettings from "metabase/lib/settings";
+import * as Lib from "metabase-lib";
+import Question from "metabase-lib/v1/Question";
 
 export default class LeafletMap extends Component {
   constructor(props) {
     super(props);
 
-    this.mapRef = React.createRef();
+    this.mapRef = createRef();
   }
 
   componentDidMount() {
@@ -26,7 +23,8 @@ export default class LeafletMap extends Component {
       const element = this.mapRef.current;
 
       const map = (this.map = L.map(element, {
-        scrollWheelZoom: false,
+        scrollWheelZoom: true,
+        wheelPxPerZoomLevel: 30,
         minZoom: 2,
         drawControlTooltips: false,
         zoomSnap: false,
@@ -124,6 +122,17 @@ export default class LeafletMap extends Component {
     this.map.remove();
   }
 
+  supportsFilter() {
+    const {
+      series: [{ card }],
+      metadata,
+    } = this.props;
+
+    const question = new Question(card, metadata);
+    const { isNative } = Lib.queryDisplayInfo(question.query());
+    return !isNative || question.isSaved();
+  }
+
   startFilter() {
     this._filter = new L.Draw.Rectangle(
       this.map,
@@ -148,6 +157,7 @@ export default class LeafletMap extends Component {
       ],
       settings,
       onChangeCardAndRun,
+      metadata,
     } = this.props;
 
     const latitudeColumn = _.findWhere(cols, {
@@ -157,16 +167,27 @@ export default class LeafletMap extends Component {
       name: settings["map.longitude_column"],
     });
 
-    const question = new Question(card);
-    if (question.isStructured()) {
-      const nextCard = updateLatLonFilter(
-        question.query(),
+    const question = new Question(card, metadata);
+    if (this.supportsFilter()) {
+      const query = question.query();
+      const stageIndex = -1;
+      const filterBounds = {
+        north: bounds.getNorth(),
+        south: bounds.getSouth(),
+        west: bounds.getWest(),
+        east: bounds.getEast(),
+      };
+      const updatedQuery = Lib.updateLatLonFilter(
+        query,
+        stageIndex,
         latitudeColumn,
         longitudeColumn,
-        bounds,
-      )
-        .question()
-        .card();
+        question.id(),
+        filterBounds,
+      );
+      const updatedQuestion = question.setQuery(updatedQuery);
+      const nextCard = updatedQuestion.card();
+
       onChangeCardAndRun({ nextCard });
     }
 

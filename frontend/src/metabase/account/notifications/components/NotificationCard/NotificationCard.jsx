@@ -1,7 +1,8 @@
-import React, { useCallback } from "react";
 import PropTypes from "prop-types";
+import { useCallback } from "react";
 import { t } from "ttag";
-import Settings from "metabase/lib/settings";
+
+import Link from "metabase/core/components/Link";
 import { formatDateTimeWithUnit } from "metabase/lib/formatting";
 import {
   canArchive,
@@ -9,13 +10,14 @@ import {
   formatLink,
   formatTitle,
 } from "metabase/lib/notifications";
+import Settings from "metabase/lib/settings";
+
 import {
-  NotificationContent,
-  NotificationIcon,
-  NotificationDescription,
   NotificationCardRoot,
+  NotificationContent,
+  NotificationDescription,
+  NotificationIcon,
   NotificationMessage,
-  NotificationTitle,
 } from "./NotificationCard.styled";
 
 const propTypes = {
@@ -24,9 +26,17 @@ const propTypes = {
   user: PropTypes.object.isRequired,
   onUnsubscribe: PropTypes.func,
   onArchive: PropTypes.func,
+  isEditable: PropTypes.bool,
 };
 
-const NotificationCard = ({ item, type, user, onUnsubscribe, onArchive }) => {
+const NotificationCard = ({
+  item,
+  type,
+  user,
+  isEditable,
+  onUnsubscribe,
+  onArchive,
+}) => {
   const hasArchive = canArchive(item, user);
 
   const onUnsubscribeClick = useCallback(() => {
@@ -40,28 +50,29 @@ const NotificationCard = ({ item, type, user, onUnsubscribe, onArchive }) => {
   return (
     <NotificationCardRoot>
       <NotificationContent>
-        <NotificationTitle to={formatLink(item, type)}>
+        <Link variant="brandBold" to={formatLink(item, type)}>
           {formatTitle(item, type)}
-        </NotificationTitle>
+        </Link>
         <NotificationDescription>
           {item.channels.map((channel, index) => (
             <NotificationMessage key={index}>
               {getChannelMessage(channel)}
             </NotificationMessage>
           ))}
-          <NotificationMessage>
+          <NotificationMessage data-server-date>
             {getCreatorMessage(item, user)}
           </NotificationMessage>
         </NotificationDescription>
       </NotificationContent>
-      {!hasArchive && (
+
+      {isEditable && !hasArchive && (
         <NotificationIcon
           name="close"
           tooltip={t`Unsubscribe`}
           onClick={onUnsubscribeClick}
         />
       )}
-      {hasArchive && (
+      {isEditable && hasArchive && (
         <NotificationIcon
           name="close"
           tooltip={t`Delete`}

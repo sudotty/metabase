@@ -1,0 +1,15 @@
+.item {
+  cursor: pointer;
+  border-radius: 6px;
+  word-break: break-all;
+
+  &:hover {
+    color: var(--mb-color-text-hover);
+    background-color: var(--mb-color-background-hover);
+  }
+
+  [aria-selected="true"] & {
+    color: var(--mb-color-text-selected) !important;
+    background-color: var(--mb-color-background-selected) !important;
+  }
+}

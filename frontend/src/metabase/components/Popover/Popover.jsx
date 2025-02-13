@@ -1,19 +1,24 @@
-import React, { Component } from "react";
+import cx from "classnames";
 import PropTypes from "prop-types";
+import { Children, Component, cloneElement } from "react";
 import ReactDOM from "react-dom";
-
-import OnClickOutsideWrapper from "metabase/components/OnClickOutsideWrapper";
 import Tether from "tether";
 
-import cx from "classnames";
+import OnClickOutsideWrapper from "metabase/components/OnClickOutsideWrapper";
+import CS from "metabase/css/core/index.css";
+import ZIndex from "metabase/css/core/z-index.module.css";
+import { isCypressActive } from "metabase/env";
 
-import "./Popover.css";
+import PopoverS from "./Popover.module.css";
 
-// space we should leave berween page edge and popover edge
+// space we should leave between page edge and popover edge
 const PAGE_PADDING = 10;
 // Popover padding and border
 const POPOVER_BODY_PADDING = 2;
 
+/**
+ * @deprecated prefer Popover from "metabase/ui" instead
+ */
 export default class Popover extends Component {
   constructor(props, context) {
     super(props, context);
@@ -63,11 +68,10 @@ export default class Popover extends Component {
       PropTypes.func,
       PropTypes.array,
     ]),
-    dismissOnClickOutside: PropTypes.func,
-    dismissOnEscape: PropTypes.func,
-    target: PropTypes.oneOfType([PropTypes.func, PropTypes.node]),
+    target: PropTypes.any,
     targetEvent: PropTypes.object,
     role: PropTypes.string,
+    ignoreTrigger: PropTypes.bool,
   };
 
   static defaultProps = {
@@ -84,29 +88,121 @@ export default class Popover extends Component {
     autoWidth: false,
     noOnClickOutsideWrapper: false,
     containerClassName: "",
+    ignoreTrigger: false,
   };
 
   _getPopoverElement(isOpen) {
+    // 3s is an overkill for Cypress, but let's start with it and dial it down
+    // if we see that the flakes don't appear anymore
+    const resizeTimer = isCypressActive ? 3000 : 100;
+
     if (!this._popoverElement && isOpen) {
       this._popoverElement = document.createElement("span");
-      this._popoverElement.className = `PopoverContainer ${this.props.containerClassName}`;
+      this._popoverElement.className = cx(
+        PopoverS.PopoverContainer,
+        ZIndex.Overlay,
+        this.props.containerClassName,
+      );
+      this._popoverElement.dataset.testid = "popover";
       document.body.appendChild(this._popoverElement);
+
       this._timer = setInterval(() => {
         const { width, height } = this._popoverElement.getBoundingClientRect();
         if (this.state.width !== width || this.state.height !== height) {
           this.setState({ width, height });
         }
-      }, 100);
+      }, resizeTimer);
     }
     return this._popoverElement;
   }
 
   componentDidMount() {
-    this._renderPopover(this.props.isOpen);
+    this.updateComponentPosition(this.props.isOpen);
+  }
+
+  updateComponentPosition(isOpen) {
+    if (!isOpen) {
+      return;
+    }
+
+    const tetherOptions = {
+      element: this._popoverElement,
+      target: this._getTargetElement(),
+    };
+
+    if (!this._best || !this.props.pinInitialAttachment) {
+      let best = {
+        attachmentX: "center",
+        attachmentY: "top",
+        targetAttachmentX: "center",
+        targetAttachmentY: "bottom",
+        offsetX: 0,
+        offsetY: 0,
+      };
+
+      // horizontal
+      best = this._getBestAttachmentOptions(
+        tetherOptions,
+        best,
+        this.props.horizontalAttachments,
+        ["left", "right"],
+        (best, attachmentX) => ({
+          ...best,
+          attachmentX: attachmentX,
+          targetAttachmentX: this.props.alignHorizontalEdge
+            ? attachmentX
+            : "center",
+          offsetX: {
+            center: 0,
+            left: -this.props.targetOffsetX,
+            right: this.props.targetOffsetX,
+          }[attachmentX],
+        }),
+      );
+
+      // vertical
+      best = this._getBestAttachmentOptions(
+        tetherOptions,
+        best,
+        this.props.verticalAttachments,
+        ["top", "bottom"],
+        (best, attachmentY) => ({
+          ...best,
+          attachmentY: attachmentY,
+          targetAttachmentY: (
+            this.props.alignVerticalEdge
+              ? attachmentY === "bottom"
+              : attachmentY === "top"
+          )
+            ? "bottom"
+            : "top",
+          offsetY: {
+            top: this.props.targetOffsetY,
+            bottom: -this.props.targetOffsetY,
+          }[attachmentY],
+        }),
+      );
+
+      this._best = best;
+    }
+
+    if (this.props.sizeToFit) {
+      if (this._best.targetAttachmentY === "top") {
+        this.constrainPopoverToBetweenViewportAndTarget(tetherOptions, "top");
+      } else if (this._best.targetAttachmentY === "bottom") {
+        this.constrainPopoverToBetweenViewportAndTarget(
+          tetherOptions,
+          "bottom",
+        );
+      }
+    }
+
+    // finally set the best options
+    this._setTetherOptions(tetherOptions, this._best);
   }
 
   componentDidUpdate() {
-    this._renderPopover(this.props.isOpen);
+    this.updateComponentPosition(this.props.isOpen);
   }
 
   componentWillUnmount() {
@@ -114,12 +210,12 @@ export default class Popover extends Component {
       this._tether.destroy();
       delete this._tether;
     }
+
     if (this._popoverElement) {
-      this._renderPopover(false);
-      ReactDOM.unmountComponentAtNode(this._popoverElement);
       if (this._popoverElement.parentNode) {
         this._popoverElement.parentNode.removeChild(this._popoverElement);
       }
+
       delete this._popoverElement;
       clearInterval(this._timer);
       delete this._timer;
@@ -139,13 +235,14 @@ export default class Popover extends Component {
     const content = (
       <div
         id={this.props.id}
+        data-element-id="legacy-popover"
         className={cx(
-          "PopoverBody",
+          PopoverS.PopoverBody,
           {
-            "PopoverBody--withBackground": this.props.hasBackground,
-            "PopoverBody--withArrow":
+            [PopoverS.PopoverBodyWithBackground]: this.props.hasBackground,
+            [PopoverS.PopoverBodyWithArrow]:
               this.props.hasArrow && this.props.hasBackground,
-            "PopoverBody--autoWidth": this.props.autoWidth,
+            [PopoverS.PopoverBodyAutoWidth]: this.props.autoWidth,
           },
           // TODO kdoh 10/16/2017 we should eventually remove this
           this.props.className,
@@ -155,14 +252,11 @@ export default class Popover extends Component {
       >
         {typeof this.props.children === "function"
           ? this.props.children(childProps)
-          : React.Children.count(this.props.children) === 1 &&
-            // NOTE: workaround for https://github.com/facebook/react/issues/12136
-            !Array.isArray(this.props.children)
-          ? React.cloneElement(
-              React.Children.only(this.props.children),
-              childProps,
-            )
-          : this.props.children}
+          : Children.count(this.props.children) === 1 &&
+              // NOTE: workaround for https://github.com/facebook/react/issues/12136
+              !Array.isArray(this.props.children)
+            ? cloneElement(Children.only(this.props.children), childProps)
+            : this.props.children}
       </div>
     );
     if (this.props.noOnClickOutsideWrapper) {
@@ -171,8 +265,9 @@ export default class Popover extends Component {
       return (
         <OnClickOutsideWrapper
           handleDismissal={this.handleDismissal}
-          dismissOnEscape={this.props.dismissOnEscape}
-          dismissOnClickOutside={this.props.dismissOnClickOutside}
+          ignoreElement={
+            this.props.ignoreTrigger ? this._getTargetElement() : undefined
+          }
         >
           {content}
         </OnClickOutsideWrapper>
@@ -212,8 +307,8 @@ export default class Popover extends Component {
       attachmentY === "top"
         ? window.innerHeight - bottom - this.props.targetOffsetY - PAGE_PADDING
         : attachmentY === "bottom"
-        ? top - this.props.targetOffsetY - PAGE_PADDING
-        : 0,
+          ? top - this.props.targetOffsetY - PAGE_PADDING
+          : 0,
     );
 
     // get the largest available height, then subtract .PopoverBody's border and padding
@@ -266,30 +361,55 @@ export default class Popover extends Component {
 
   _getTargetElement() {
     let target;
+
     if (this.props.targetEvent) {
       // create a fake element at the event coordinates
       target = document.getElementById("popover-event-target");
+
       if (!target) {
         target = document.createElement("div");
         target.id = "popover-event-target";
         document.body.appendChild(target);
       }
+
       target.style.left = this.props.targetEvent.clientX - 3 + "px";
       target.style.top = this.props.targetEvent.clientY - 3 + "px";
     } else if (this.props.target) {
       if (typeof this.props.target === "function") {
-        target = ReactDOM.findDOMNode(this.props.target());
+        target = this.props.target();
       } else {
-        target = ReactDOM.findDOMNode(this.props.target);
+        target = this.props.target;
       }
     }
+
     if (target == null) {
-      target = ReactDOM.findDOMNode(this).parentNode;
+      target = this._popoverElement;
     }
+
     return target;
   }
 
-  _renderPopover(isOpen) {
+  constrainPopoverToBetweenViewportAndTarget(tetherOptions, direction) {
+    const body = tetherOptions.element.querySelector(
+      "[data-element-id=legacy-popover]",
+    );
+    const target = this._getTargetElement();
+    const bodyHeight = body.getBoundingClientRect().height;
+    const space =
+      direction === "top"
+        ? target.getBoundingClientRect().top
+        : window.innerHeight - target.getBoundingClientRect().bottom;
+    const maxHeight = space - PAGE_PADDING;
+    if (bodyHeight > maxHeight) {
+      body.style.maxHeight = maxHeight + "px";
+      body.classList.add(CS.scrollY);
+      body.classList.add(CS.scrollShow);
+    }
+  }
+
+  render() {
+    const isOpen = this.props.isOpen;
+
     const popoverElement = this._getPopoverElement(isOpen);
     if (popoverElement) {
       if (isOpen) {
@@ -303,114 +423,13 @@ export default class Popover extends Component {
       }
     }
 
-    // popover is open, lets do this!
     if (isOpen) {
-      ReactDOM.unstable_renderSubtreeIntoContainer(
-        this,
+      return ReactDOM.createPortal(
         <span>{isOpen ? this._popoverComponent() : null}</span>,
         popoverElement,
-        () => {
-          const tetherOptions = {
-            element: popoverElement,
-            target: this._getTargetElement(),
-          };
-
-          if (!this._best || !this.props.pinInitialAttachment) {
-            let best = {
-              attachmentX: "center",
-              attachmentY: "top",
-              targetAttachmentX: "center",
-              targetAttachmentY: "bottom",
-              offsetX: 0,
-              offsetY: 0,
-            };
-
-            // horizontal
-            best = this._getBestAttachmentOptions(
-              tetherOptions,
-              best,
-              this.props.horizontalAttachments,
-              ["left", "right"],
-              (best, attachmentX) => ({
-                ...best,
-                attachmentX: attachmentX,
-                targetAttachmentX: this.props.alignHorizontalEdge
-                  ? attachmentX
-                  : "center",
-                offsetX: {
-                  center: 0,
-                  left: -this.props.targetOffsetX,
-                  right: this.props.targetOffsetX,
-                }[attachmentX],
-              }),
-            );
-
-            // vertical
-            best = this._getBestAttachmentOptions(
-              tetherOptions,
-              best,
-              this.props.verticalAttachments,
-              ["top", "bottom"],
-              (best, attachmentY) => ({
-                ...best,
-                attachmentY: attachmentY,
-                targetAttachmentY: (this.props.alignVerticalEdge
-                ? attachmentY === "bottom"
-                : attachmentY === "top")
-                  ? "bottom"
-                  : "top",
-                offsetY: {
-                  top: this.props.targetOffsetY,
-                  bottom: -this.props.targetOffsetY,
-                }[attachmentY],
-              }),
-            );
-
-            this._best = best;
-          }
-
-          if (this.props.sizeToFit) {
-            if (this._best.targetAttachmentY === "top") {
-              this.constrainPopoverToBetweenViewportAndTarget(
-                tetherOptions,
-                "top",
-              );
-            } else if (this._best.targetAttachmentY === "bottom") {
-              this.constrainPopoverToBetweenViewportAndTarget(
-                tetherOptions,
-                "bottom",
-              );
-            }
-          }
-
-          // finally set the best options
-          this._setTetherOptions(tetherOptions, this._best);
-        },
       );
-    } else {
-      if (this._popoverElement) {
-        ReactDOM.unmountComponentAtNode(this._popoverElement);
-      }
     }
-  }
 
-  constrainPopoverToBetweenViewportAndTarget(tetherOptions, direction) {
-    const body = tetherOptions.element.querySelector(".PopoverBody");
-    const target = this._getTargetElement();
-    const bodyHeight = body.getBoundingClientRect().height;
-    const space =
-      direction === "top"
-        ? target.getBoundingClientRect().top
-        : window.innerHeight - target.getBoundingClientRect().bottom;
-    const maxHeight = space - PAGE_PADDING;
-    if (bodyHeight > maxHeight) {
-      body.style.maxHeight = maxHeight + "px";
-      body.classList.add("scroll-y");
-      body.classList.add("scroll-show");
-    }
-  }
-
-  render() {
-    return <span className="hide" />;
+    return <span className={CS.hide} />;
   }
 }

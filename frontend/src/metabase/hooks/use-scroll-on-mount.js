@@ -1,11 +1,11 @@
-import { useRef, useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 export const useScrollOnMount = () => {
   const ref = useRef(null);
 
   useEffect(() => {
     if (ref.current) {
-      ref.current.scrollIntoView({ block: "center" });
+      ref.current.scrollIntoView?.({ block: "center" });
     }
   }, []);
 

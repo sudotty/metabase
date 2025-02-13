@@ -1,0 +1,154 @@
+default: &default
+  - "locales/**"
+  - "bin/**/!(*.md)"
+
+shared_sources: &shared_sources
+  - "src/**/*.cljc"
+  - "src/**/*.cljs"
+  - "package.json"
+
+shared_specs: &shared_specs
+  - "test/**/*.cljc"
+  - "test/**/*.cljs"
+
+frontend_ci: &frontend_ci
+  - ".github/actions/prepare-frontend/**"
+  - ".github/actions/prepare-backend/**"
+  - ".github/workflows/frontend.yml"
+
+frontend_sources: &frontend_sources
+  - *shared_sources
+  - "enterprise/frontend/!(test)**/**/{!(*.spec),}.{js,jsx,ts,tsx,css}"
+  - "frontend/!(test)**/**/{!(*.spec),}.{js,jsx,ts,tsx,css}"
+  - "yarn.lock"
+  - "**/tsconfig*.json"
+  - "package.json"
+  - "babel.config.json"
+  - ".eslintrc.js"
+  - "postcss.config.js"
+  - "webpack.config.js"
+  - "webpack.embedding-sdk.config.js"
+  - "webpack.static-viz.config.js"
+  - ".nvmrc"
+
+frontend_specs: &frontend_specs
+  - *shared_specs
+  - "frontend/test/**"
+  - "frontend/**/tests/**"
+  - "frontend/**/*.unit.*"
+  - "jest.config.js"
+  - "jest.tz.unit.conf.json"
+
+release_source: &release_sources
+  - "release/**"
+
+frontend_all: &frontend_all
+  - *frontend_ci
+  - *frontend_sources
+  - *frontend_specs
+
+frontend_loki_ci: &frontend_loki_ci
+  - ".github/workflows/loki.yml"
+  - ".loki/**"
+  - ".storybook/**"
+
+backend_ci: &backend_ci
+  - ".github/actions/prepare-frontend/**"
+  - ".github/actions/prepare-backend/**"
+  - ".github/actions/test-driver/**"
+  - ".github/workflows/backend.yml"
+  - ".github/workflows/drivers.yml"
+
+backend_presto_kerberos:
+  - "**/presto_jdbc/**"
+  - "**/presto_jdbc.clj"
+  - ".github/workflows/presto-kerberos-integration-test.yml"
+
+backend_sources: &backend_sources
+  - *shared_sources
+  - "**deps.edn"
+  - "enterprise/backend/src/**"
+  - "src/**"
+  - "modules/drivers/{*,*/{*,!(test)/**}}"
+  - "resources/**"
+  - ".clj-kondo/**"
+
+backend_specs: &backend_specs
+  - *shared_specs
+  - "test/**"
+  - "enterprise/backend/test/**"
+  - "test_modules/**"
+  - "modules/drivers/*/test/**"
+  - "test_config/**"
+  - "test_resources/**"
+
+backend_all: &backend_all
+  - *default
+  - *backend_ci
+  - *backend_sources
+  - *backend_specs
+
+sources: &sources
+  - *shared_sources
+  - *frontend_sources
+  - *backend_sources
+
+e2e_ci: &e2e_ci
+  - ".github/actions/prepare-frontend/**"
+  - ".github/actions/prepare-backend/**"
+  - ".github/actions/prepare-uberjar-artifact/**"
+  - ".github/actions/e2e-prepare-containers/**"
+  - ".github/actions/prepare-cypress/**"
+  - ".github/actions/run-snowplow-micro/**"
+  - ".github/workflows/e2e-*"
+
+e2e_specs: &e2e_specs
+  - "**/*.cy.*.js"
+  - "**/*.cy.*.ts"
+  - "e2e/runner/**"
+  - "e2e/support/**"
+  - "e2e/snapshot*/**"
+
+e2e_cross_version: &e2e_cross_version
+  - ".github/workflows/e2e-cross-version.yml"
+  - "e2e/test/scenarios/cross-version/**"
+
+e2e_all:
+  - *default
+  - *e2e_ci
+  - *sources
+  - *e2e_specs
+
+snowplow:
+  - ".github/workflows/snowplow.yml"
+  - "snowplow/**"
+
+documentation:
+  - "docs/**"
+  - "**/*.md"
+
+yaml:
+  - "**/*.yml"
+  - "**/*.yaml"
+
+codeql:
+  - "frontend/src/**"
+  - "enterprise/frontend/src/**"
+
+i18n:
+  - *default
+  - ".github/actions/prepare-frontend/**"
+  - ".github/actions/prepare-backend/**"
+  - ".github/workflows/i18n.yml"
+  - *sources
+
+visualizations:
+  - "frontend/src/metabase/visualizations/**"
+  - "frontend/src/metabase/static-viz/**"
+  - "src/metabase/pulse/**"
+
+cljs:
+  - *shared_sources
+  - *shared_specs
+  - ".github/workflows/cljs.yml"
+  - "shadow-cljs.edn"

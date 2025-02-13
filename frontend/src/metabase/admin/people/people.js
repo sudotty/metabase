@@ -1,23 +1,23 @@
-import {
-  createAction,
-  handleActions,
-  combineReducers,
-} from "metabase/lib/redux";
-
-import * as MetabaseAnalytics from "metabase/lib/analytics";
-
-import { PermissionsApi } from "metabase/services";
-
-import _ from "underscore";
 import { assoc, dissoc } from "icepick";
+import _ from "underscore";
 
 import Users from "metabase/entities/users";
+import {
+  combineReducers,
+  createAction,
+  createThunkAction,
+  handleActions,
+} from "metabase/lib/redux";
+import { PermissionsApi } from "metabase/services";
 
-export const LOAD_MEMBERSHIPS = "metabase/admin/people/LOAD_MEMBERSHIPS";
-export const CREATE_MEMBERSHIP = "metabase/admin/people/CREATE_MEMBERSHIP";
-export const DELETE_MEMBERSHIP = "metabase/admin/people/DELETE_MEMBERSHIP";
-export const CLEAR_TEMPORARY_PASSWORD =
-  "metabase/admin/people/CLEAR_TEMPORARY_PASSWORD";
+import {
+  CLEAR_TEMPORARY_PASSWORD,
+  CREATE_MEMBERSHIP,
+  DELETE_MEMBERSHIP,
+  LOAD_MEMBERSHIPS,
+  UPDATE_MEMBERSHIP,
+} from "./events";
+import { getMemberships } from "./selectors";
 
 // ACTION CREATORS
 
@@ -38,21 +38,34 @@ export const createMembership = createAction(
       user_id: userId,
       group_id: groupId,
     });
-    MetabaseAnalytics.trackStructEvent("People Groups", "Membership Added");
+
     return {
       user_id: userId,
       group_id: groupId,
-      membership_id: _.findWhere(groupMemberships, { user_id: userId })
-        .membership_id,
+      membership: _.findWhere(groupMemberships, { user_id: userId }),
     };
   },
 );
-export const deleteMembership = createAction(
+export const deleteMembership = createThunkAction(
   DELETE_MEMBERSHIP,
-  async ({ membershipId }) => {
+  membershipId => async (_dispatch, getState) => {
+    const memberships = getMemberships(getState());
+    const membership = memberships[membershipId];
     await PermissionsApi.deleteMembership({ id: membershipId });
-    MetabaseAnalytics.trackStructEvent("People Groups", "Membership Deleted");
-    return membershipId;
+
+    return { membershipId, groupId: membership.group_id };
+  },
+);
+
+export const updateMembership = createAction(
+  UPDATE_MEMBERSHIP,
+  async membership => {
+    await PermissionsApi.updateMembership({
+      ...membership,
+      id: membership.membership_id,
+    });
+
+    return membership;
   },
 );
 
@@ -66,11 +79,19 @@ const memberships = handleActions(
       next: (state, { payload: memberships }) => memberships,
     },
     [CREATE_MEMBERSHIP]: {
+      next: (state, { payload: { group_id, user_id, membership } }) =>
+        assoc(state, membership.membership_id, {
+          group_id,
+          user_id,
+          membership_id: membership.membership_id,
+        }),
+    },
+    [UPDATE_MEMBERSHIP]: {
       next: (state, { payload: membership }) =>
         assoc(state, membership.membership_id, membership),
     },
     [DELETE_MEMBERSHIP]: {
-      next: (state, { payload: membershipId }) => dissoc(state, membershipId),
+      next: (state, { payload }) => dissoc(state, payload.membershipId),
     },
   },
   {},

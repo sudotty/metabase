@@ -1,15 +1,19 @@
 (ns metabase.models.secret.keystore-test
-  (:require [clojure.java.io :as io]
-            [clojure.test :refer :all]
-            [metabase.api.common :as api]
-            [metabase.models :refer [Database Secret]]
-            [metabase.test :as mt]
-            [metabase.test.fixtures :as fixtures])
-  (:import [java.io ByteArrayOutputStream File]
-           java.nio.charset.StandardCharsets
-           [java.security KeyStore KeyStore$PasswordProtection KeyStore$SecretKeyEntry]
-           javax.crypto.SecretKey
-           javax.crypto.spec.SecretKeySpec))
+  (:require
+   [clojure.java.io :as io]
+   [clojure.test :refer :all]
+   [metabase.api.common :as api]
+   [metabase.test :as mt]
+   [metabase.test.fixtures :as fixtures]
+   [toucan2.core :as t2])
+  (:import
+   (java.io ByteArrayOutputStream)
+   (java.nio.charset StandardCharsets)
+   (java.security KeyStore KeyStore$PasswordProtection KeyStore$SecretKeyEntry)
+   (javax.crypto SecretKey)
+   (javax.crypto.spec SecretKeySpec)))
+
+(set! *warn-on-reflection* true)
 
 (use-fixtures :once (fixtures/initialize :db :plugins :test-drivers))
 
@@ -23,7 +27,7 @@
   (let [pw                  (.toCharArray ks-password)
         protection          (KeyStore$PasswordProtection. pw)
         ^KeyStore key-store (doto (KeyStore/getInstance "PKCS12")
-                                  (.load nil pw))]
+                              (.load nil pw))]
     (doseq [[^String alias ^String value] entries]
       (.setEntry key-store
                  alias
@@ -36,14 +40,8 @@
   "Initializes and returns a `KeyStore` instance from the given `ks-bytes` (keystore contents) and `ks-password`."
   {:added "0.41.0"}
   ^KeyStore [^bytes ks-bytes ^chars ks-password]
-  (let [^File temp-file (File/createTempFile "temp-keystore_" ".jks")]
-    (with-open [out (io/output-stream temp-file)]
-      (.write out ks-bytes))
-    (.deleteOnExit temp-file)
-    ;; Java 9 added a getInstance method that takes the file and password as params, but since we still support JDK 8,
-    ;; we have to do it this way
-    (doto (KeyStore/getInstance (KeyStore/getDefaultType))
-      (.load (io/input-stream temp-file) ks-password))))
+  (doto (KeyStore/getInstance (KeyStore/getDefaultType))
+    (.load (io/input-stream ks-bytes) ks-password)))
 
 (defn- assert-entries [^String protection-password ^KeyStore ks entries]
   (let [protection (KeyStore$PasswordProtection. (.toCharArray protection-password))]
@@ -56,23 +54,25 @@
   (testing "A secret with :type :keystore can be saved and loaded properly"
     (binding [api/*current-user-id* (mt/user->id :crowberto)]
       (with-open [baos (ByteArrayOutputStream.)]
-        (let [key-alias  "my-secret-key"
-              key-value  "cromulent"
-              ks-pw      "embiggen"
-              ks         (create-test-jks-instance ks-pw {key-alias key-value})]
-          (.store ks baos (.toCharArray ks-pw))
-          (mt/with-temp Database [{:keys [id details] :as database} {:engine  :secret-test-driver
-                                                                     :name    "Test DB with keystore"
-                                                                     :details {:host "localhost"
-                                                                               :keystore-value (.toByteArray baos)
-                                                                               :keystore-password-value ks-pw}}]
-             (is (some? database))
-             (is (not (contains? details :keystore-value)) "keystore-value was removed from details")
-             (is (contains? details :keystore-id) "keystore-id was added to details")
-             (is (not (contains? details :keystore-password-value)) ":keystore-password-value was removed from details")
-             (is (contains? details :keystore-password-id) ":keystore-password-id was added to details")
-             (let [{ks-pw-bytes :value} (Secret (:keystore-password-id details))
-                   ks-pw-str            (String. ks-pw-bytes StandardCharsets/UTF_8)
-                   {:keys [value]}      (Secret (:keystore-id details))
-                   ks              (bytes->keystore value (.toCharArray ks-pw-str))]
-               (assert-entries ks-pw-str ks {key-alias key-value}))))))))
+        (let [key-alias "my-secret-key"
+              key-value "cromulent"
+              ks-pw     "embiggen"
+              _         (doto (create-test-jks-instance ks-pw {key-alias key-value})
+                          (.store baos (.toCharArray ks-pw)))
+              ks-bytes (.toByteArray baos)]
+          (mt/with-temp [:model/Database {:keys [details] :as database} {:engine  :secret-test-driver
+                                                                         :name    "Test DB with keystore"
+                                                                         :details {:host                    "localhost"
+                                                                                   :keystore-value          (mt/bytes->base64-data-uri ks-bytes)
+                                                                                   :keystore-password-value ks-pw}}]
+            (is (some? database))
+            (is (not (contains? details :keystore-value)) "keystore-value was removed from details")
+            (is (contains? details :keystore-id) "keystore-id was added to details")
+            (is (not (contains? details :keystore-password-value)) ":keystore-password-value was removed from details")
+            (is (contains? details :keystore-password-id) ":keystore-password-id was added to details")
+            (let [{ks-pw-bytes :value} (t2/select-one :model/Secret :id (:keystore-password-id details))
+                  ks-pw-str            (String. ^bytes ks-pw-bytes StandardCharsets/UTF_8)
+                  {:keys [value]}      (t2/select-one :model/Secret :id (:keystore-id details))
+                  ks                   (bytes->keystore value (.toCharArray ks-pw-str))]
+              (is (= (seq ks-bytes) (seq value)))
+              (assert-entries ks-pw-str ks {key-alias key-value}))))))))

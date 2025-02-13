@@ -1,9 +1,13 @@
 (ns metabase.server.middleware.browser-cookie-test
-  (:require [clojure.test :refer :all]
-            [metabase.server.middleware.browser-cookie :as mw.browser-cookie]
-            [ring.mock.request :as mock]
-            [ring.util.response :as response])
-  (:import java.util.UUID))
+  (:require
+   [clojure.test :refer :all]
+   [metabase.server.middleware.browser-cookie :as mw.browser-cookie]
+   [ring.mock.request :as ring.mock]
+   [ring.util.response :as response])
+  (:import
+   (java.util UUID)))
+
+(set! *warn-on-reflection* true)
 
 (defn- handler [request]
   ((mw.browser-cookie/ensure-browser-id-cookie
@@ -19,7 +23,7 @@
 
 (deftest existing-cookie
   (testing "do not set DEVICE cookie if one is already present"
-    (let [request  (-> (mock/request :get "https://localhost/foo")
+    (let [request  (-> (ring.mock/request :get "https://localhost/foo")
                        (assoc :cookies {browser-id-cookie-name {:value test-uuid}}))
           response (handler request)]
       (is (= (str test-uuid) (:body response)))
@@ -27,7 +31,7 @@
 
 (deftest no-existing-cookie
   (testing "set DEVICE cookie with SameSite=Lax if served over HTTP"
-    (let [request    (mock/request :get "http://localhost/foo")
+    (let [request    (ring.mock/request :get "http://localhost/foo")
           response   (handler request)
           browser-id (:body response)]
       (is (some? (UUID/fromString browser-id)))
@@ -38,7 +42,7 @@
              (-> (get-in response [:cookies browser-id-cookie-name])
                  (dissoc :expires))))))
   (testing "set DEVICE cookie with SameSite=None if served over HTTPS"
-    (let [request    (mock/request :get "https://localhost/foo")
+    (let [request    (ring.mock/request :get "https://localhost/foo")
           response   (handler request)
           browser-id (:body response)]
       (is (some? (UUID/fromString browser-id)))

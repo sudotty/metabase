@@ -1,13 +1,19 @@
 (ns metabase.query-processor.streaming.test-util
   "Utility functions for testing QP streaming (download) functionality."
-  (:require [cheshire.core :as json]
-            [clojure.data.csv :as csv]
-            [clojure.test :refer :all]
-            [dk.ative.docjure.spreadsheet :as spreadsheet]
-            [metabase.query-processor :as qp]
-            [metabase.query-processor.streaming :as qp.streaming]
-            [metabase.test :as mt])
-  (:import [java.io BufferedInputStream BufferedOutputStream ByteArrayInputStream ByteArrayOutputStream InputStream InputStreamReader]))
+  (:require
+   [clojure.data.csv :as csv]
+   [clojure.test :refer :all]
+   [dk.ative.docjure.spreadsheet :as spreadsheet]
+   [metabase.query-processor :as qp]
+   [metabase.query-processor.pipeline :as qp.pipeline]
+   [metabase.query-processor.streaming :as qp.streaming]
+   [metabase.test :as mt]
+   [metabase.util :as u]
+   [metabase.util.json :as json])
+  (:import
+   (java.io BufferedInputStream BufferedOutputStream ByteArrayInputStream ByteArrayOutputStream InputStream InputStreamReader)))
+
+(set! *warn-on-reflection* true)
 
 (defmulti ^:private parse-result*
   {:arglists '([export-format ^InputStream input-stream column-names])}
@@ -16,7 +22,7 @@
 (defmethod parse-result* :api
   [_ ^InputStream is _]
   (with-open [reader (InputStreamReader. is)]
-    (let [response (json/parse-stream reader true)]
+    (let [response (json/decode+kw reader)]
       (cond-> response
         (map? response) (dissoc :database_id :started_at :json_query :average_execution_time :context :running_time)))))
 
@@ -51,9 +57,12 @@
   [export-format query & args]
   (with-open [bos (ByteArrayOutputStream.)
               os  (BufferedOutputStream. bos)]
-    (is (= :completed
-           (:status (qp/process-query query (assoc (qp.streaming/streaming-context export-format os)
-                                                   :timeout 15000)))))
+    (qp.streaming/do-with-streaming-rff
+     export-format os
+     (fn [rff]
+       (binding [qp.pipeline/*query-timeout-ms* (u/seconds->ms 15)]
+         (is (=? {:status :completed}
+                 (qp/process-query query rff))))))
     (.flush os)
     (let [bytea (.toByteArray bos)]
       (with-open [is (BufferedInputStream. (ByteArrayInputStream. bytea))]
@@ -64,12 +73,12 @@
   {:arglists '([export-format query] [export-format query column-names])}
   [export-format query & args]
   (let [byytes (if (= export-format :api)
-                 (mt/user-http-request :crowberto :post "dataset"
+                 (mt/user-real-request :crowberto :post "dataset"
                                        {:request-options {:as :byte-array}}
                                        (assoc-in query [:middleware :js-int-to-string?] false))
-                 (mt/user-http-request :crowberto :post (format "dataset/%s" (name export-format))
+                 (mt/user-real-request :crowberto :post (format "dataset/%s" (name export-format))
                                        {:request-options {:as :byte-array}}
-                                       :query (json/generate-string query)))]
+                                       {:query query, :format_rows true}))]
     (with-open [is (ByteArrayInputStream. byytes)]
       (apply parse-result export-format is args))))
 

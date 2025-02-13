@@ -1,67 +1,63 @@
-import React, { ReactNode } from "react";
-import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import ForgotPassword, { ForgotPasswordProps } from "./ForgotPassword";
+import { Route } from "react-router";
+
+import { setupForgotPasswordEndpoint } from "__support__/server-mocks";
+import { renderWithProviders, screen, waitFor } from "__support__/ui";
+import {
+  createMockSettingsState,
+  createMockState,
+} from "metabase-types/store/mocks";
+
+import { ForgotPassword } from "./ForgotPassword";
+
+const TEST_EMAIL = "user@metabase.test";
+
+interface SetupOpts {
+  isEmailConfigured?: boolean;
+  isLdapEnabled?: boolean;
+}
+
+const setup = ({ isEmailConfigured, isLdapEnabled }: SetupOpts) => {
+  const state = createMockState({
+    settings: createMockSettingsState({
+      "email-configured?": isEmailConfigured,
+      "ldap-enabled": isLdapEnabled,
+    }),
+  });
+
+  setupForgotPasswordEndpoint();
+
+  renderWithProviders(
+    <Route path="/auth/forgot_password" component={ForgotPassword} />,
+    {
+      storeInitialState: state,
+      withRouter: true,
+      initialRoute: "/auth/forgot_password",
+    },
+  );
+};
 
 describe("ForgotPassword", () => {
   it("should show a form when the user can reset their password", () => {
-    const props = getProps({ canResetPassword: true });
-
-    render(<ForgotPassword {...props} />);
+    setup({ isEmailConfigured: true });
 
     expect(screen.getByText("Forgot password")).toBeInTheDocument();
   });
 
   it("should show a success message when the form is submitted", async () => {
-    const props = getProps({
-      canResetPassword: true,
-      onResetPassword: jest.fn().mockResolvedValue({}),
+    setup({ isEmailConfigured: true });
+    await userEvent.type(screen.getByLabelText("Email address"), TEST_EMAIL);
+    await waitFor(() => {
+      expect(screen.getByText("Send password reset email")).toBeEnabled();
     });
 
-    render(<ForgotPassword {...props} />);
-    userEvent.click(screen.getByText("Send password reset email"));
-
-    const message = await screen.findByText(/Check your email/);
-    expect(message).toBeInTheDocument();
+    await userEvent.click(screen.getByText("Send password reset email"));
+    expect(await screen.findByText(/Check your email/)).toBeInTheDocument();
   });
 
   it("should show an error message when the user cannot reset their password", () => {
-    const props = getProps({ canResetPassword: false });
-
-    render(<ForgotPassword {...props} />);
+    setup({ isEmailConfigured: false });
 
     expect(screen.getByText(/contact an administrator/)).toBeInTheDocument();
   });
 });
-
-const getProps = (
-  opts?: Partial<ForgotPasswordProps>,
-): ForgotPasswordProps => ({
-  canResetPassword: false,
-  onResetPassword: jest.fn(),
-  ...opts,
-});
-
-interface FormMockProps {
-  submitTitle: string;
-  onSubmit: () => void;
-}
-
-const FormMock = ({ submitTitle, onSubmit }: FormMockProps) => {
-  return <button onClick={onSubmit}>{submitTitle}</button>;
-};
-
-jest.mock("metabase/entities/users", () => ({
-  forms: { password_reset: jest.fn() },
-  Form: FormMock,
-}));
-
-interface AuthLayoutMockProps {
-  children?: ReactNode;
-}
-
-const AuthLayoutMock = ({ children }: AuthLayoutMockProps) => {
-  return <div>{children}</div>;
-};
-
-jest.mock("../../containers/AuthLayout", () => AuthLayoutMock);

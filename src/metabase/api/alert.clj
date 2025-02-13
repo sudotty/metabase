@@ -1,57 +1,77 @@
-(ns metabase.api.alert
-  "/api/alert endpoints"
-  (:require [clojure.data :as data]
-            [compojure.core :refer [DELETE GET POST PUT]]
-            [medley.core :as m]
-            [metabase.api.common :as api]
-            [metabase.email :as email]
-            [metabase.email.messages :as messages]
-            [metabase.models.card :refer [Card]]
-            [metabase.models.interface :as mi]
-            [metabase.models.pulse :as pulse]
-            [metabase.models.pulse-channel :refer [PulseChannel]]
-            [metabase.models.pulse-channel-recipient :refer [PulseChannelRecipient]]
-            [metabase.util :as u]
-            [metabase.util.i18n :refer [tru]]
-            [metabase.util.schema :as su]
-            [schema.core :as s]
-            [toucan.db :as db]
-            [toucan.hydrate :refer [hydrate]]))
+(ns ^:deprecated metabase.api.alert
+  "/api/alert endpoints.
 
-(api/defendpoint GET "/"
-  "Fetch all alerts"
-  [archived user_id]
-  {archived (s/maybe su/BooleanString)
-   user_id  (s/maybe su/IntGreaterThanZero)}
-  (as-> (pulse/retrieve-alerts {:archived? (Boolean/parseBoolean archived)
-                                :user-id   user_id}) <>
-    (filter mi/can-read? <>)
-    (hydrate <> :can_write)))
+  Deprecated: will soon be migrated to notification APIs."
+  (:require
+   [clojure.data :as data]
+   [clojure.set :refer [difference]]
+   [medley.core :as m]
+   [metabase.api.common :as api]
+   [metabase.api.common.validation :as validation]
+   [metabase.api.macros :as api.macros]
+   [metabase.channel.email :as email]
+   [metabase.channel.email.messages :as messages]
+   [metabase.config :as config]
+   [metabase.events :as events]
+   [metabase.models.interface :as mi]
+   [metabase.models.pulse :as models.pulse]
+   [metabase.plugins.classloader :as classloader]
+   [metabase.premium-features.core :as premium-features]
+   [metabase.util :as u]
+   [metabase.util.i18n :refer [tru]]
+   [metabase.util.malli.schema :as ms]
+   [toucan2.core :as t2]))
 
-(api/defendpoint GET "/:id"
+(set! *warn-on-reflection* true)
+
+(when config/ee-available?
+  (classloader/require 'metabase-enterprise.advanced-permissions.common))
+
+(api.macros/defendpoint :get "/"
+  "Fetch alerts which the current user has created or will receive, or all alerts if the user is an admin.
+  The optional `user_id` will return alerts created by the corresponding user, but is ignored for non-admin users."
+  [_route-params
+   {:keys [archived user_id]} :- [:map
+                                  [:archived {:default false} [:maybe ms/BooleanValue]]
+                                  [:user_id  {:optional true} [:maybe ms/PositiveInt]]]]
+  (let [user-id (if api/*is-superuser?*
+                  user_id
+                  api/*current-user-id*)]
+    (as-> (models.pulse/retrieve-alerts {:archived? archived
+                                         :user-id   user-id}) <>
+      (filter mi/can-read? <>)
+      (t2/hydrate <> :can_write))))
+
+(api.macros/defendpoint :get "/:id"
   "Fetch an alert by ID"
-  [id]
-  (-> (api/read-check (pulse/retrieve-alert id))
-      (hydrate :can_write)))
+  [{:keys [id]} :- [:map
+                    [:id ms/PositiveInt]]]
+  (-> (api/read-check (models.pulse/retrieve-alert id))
+      (t2/hydrate :can_write)))
 
-(api/defendpoint GET "/question/:id"
-  "Fetch all questions for the given question (`Card`) id"
-  [id archived]
-  {id       (s/maybe su/IntGreaterThanZero)
-   archived (s/maybe su/BooleanString)}
+(api.macros/defendpoint :get "/question/:id"
+  "Fetch all alerts for the given question (`Card`) id"
+  [{:keys [id]} :- [:map
+                    [:id ms/PositiveInt]]
+   {:keys [archived]} :- [:map
+                          [:archived {:default false} [:maybe ms/BooleanValue]]]]
   (-> (if api/*is-superuser?*
-        (pulse/retrieve-alerts-for-cards {:card-ids [id], :archived? (Boolean/parseBoolean archived)})
-        (pulse/retrieve-user-alerts-for-card {:card-id id, :user-id api/*current-user-id*, :archived? (Boolean/parseBoolean archived)}))
-      (hydrate :can_write)))
+        (models.pulse/retrieve-alerts-for-cards {:card-ids [id], :archived? archived})
+        (models.pulse/retrieve-user-alerts-for-card {:card-id id, :user-id api/*current-user-id*, :archived?  archived}))
+      (t2/hydrate :can_write)))
 
 (defn- only-alert-keys [request]
   (u/select-keys-when request
-    :present [:alert_condition :alert_first_only :alert_above_goal :archived]))
+                      :present [:alert_condition :alert_first_only :alert_above_goal :archived]))
 
-(defn- email-channel [alert]
+(defn email-channel
+  "Get email channel from an alert."
+  [alert]
   (m/find-first #(= :email (keyword (:channel_type %))) (:channels alert)))
 
-(defn- slack-channel [alert]
+(defn- slack-channel
+  "Get slack channel from an alert."
+  [alert]
   (m/find-first #(= :slack (keyword (:channel_type %))) (:channels alert)))
 
 (defn- key-by [key-fn coll]
@@ -101,13 +121,10 @@
   (set (:recipients (email-channel alert))))
 
 (defn- non-creator-recipients [{{creator-id :id} :creator :as alert}]
- (remove #(= creator-id (:id %)) (collect-alert-recipients alert)))
+  (remove #(= creator-id (:id %)) (collect-alert-recipients alert)))
 
 (defn- notify-new-alert-created! [alert]
   (when (email/email-configured?)
-
-    (messages/send-new-alert-email! alert)
-
     (doseq [recipient (non-creator-recipients alert)]
       (messages/send-you-were-added-alert-email! alert recipient @api/*current-user*))))
 
@@ -116,72 +133,100 @@
     (assoc card :include_csv true)
     card))
 
-(api/defendpoint POST "/"
+(api.macros/defendpoint :post "/"
   "Create a new Alert."
-  [:as {{:keys [alert_condition card channels alert_first_only alert_above_goal]
-         :as new-alert-request-body} :body}]
-  {alert_condition  pulse/AlertConditions
-   alert_first_only s/Bool
-   alert_above_goal (s/maybe s/Bool)
-   card             pulse/CardRef
-   channels         (su/non-empty [su/Map])}
-  ;; do various perms checks as needed. Perms for an Alert == perms for its Card. So to create an Alert you need write
-  ;; perms for its Card
-  (api/write-check Card (u/the-id card))
+  [_route-params
+   _query-params
+   {:keys [alert_condition card channels]
+    :as new-alert-request-body} :- [:map
+                                    [:alert_condition  models.pulse/AlertConditions]
+                                    [:alert_first_only :boolean]
+                                    [:alert_above_goal {:optional true} [:maybe :boolean]]
+                                    [:card             models.pulse/CardRef]
+                                    [:channels         [:+ :map]]]]
+  (validation/check-has-application-permission :subscription false)
+  ;; To create an Alert you need read perms for its Card
+  (api/read-check :model/Card (u/the-id card))
   ;; ok, now create the Alert
-  (let [alert-card (-> card (maybe-include-csv alert_condition) pulse/card->ref)
+  (let [alert-card (-> card (maybe-include-csv alert_condition) models.pulse/card->ref)
         new-alert  (api/check-500
                     (-> new-alert-request-body
                         only-alert-keys
-                        (pulse/create-alert! api/*current-user-id* alert-card channels)))]
+                        (models.pulse/create-alert! api/*current-user-id* alert-card channels)))]
+    (events/publish-event! :event/alert-create {:object new-alert :user-id api/*current-user-id*})
     (notify-new-alert-created! new-alert)
     ;; return our new Alert
     new-alert))
 
 (defn- notify-on-archive-if-needed!
-  "When an alert is archived, we notify any recipients that they are no longer going to be receiving that alert"
+  "When an alert is archived, we notify all recipients that they are no longer receiving that alert."
   [alert]
   (when (email/email-configured?)
     (doseq [recipient (collect-alert-recipients alert)]
       (messages/send-admin-unsubscribed-alert-email! alert recipient @api/*current-user*))))
 
-(api/defendpoint PUT "/:id"
+(api.macros/defendpoint :put "/:id"
   "Update a `Alert` with ID."
-  [id :as {{:keys [alert_condition card channels alert_first_only alert_above_goal card channels archived]
-            :as alert-updates} :body}]
-  {alert_condition  (s/maybe pulse/AlertConditions)
-   alert_first_only (s/maybe s/Bool)
-   alert_above_goal (s/maybe s/Bool)
-   card             (s/maybe pulse/CardRef)
-   channels         (s/maybe (su/non-empty [su/Map]))
-   archived         (s/maybe s/Bool)}
+  [{:keys [id]} :- [:map
+                    [:id ms/PositiveInt]]
+   _query-params
+   {:keys [card channels archived]
+    :as alert-updates} :- [:map
+                           [:alert_condition  {:optional true} [:maybe models.pulse/AlertConditions]]
+                           [:alert_first_only {:optional true} [:maybe :boolean]]
+                           [:alert_above_goal {:optional true} [:maybe :boolean]]
+                           [:card             {:optional true} [:maybe models.pulse/CardRef]]
+                           [:channels         {:optional true} [:maybe [:+ [:map]]]]
+                           [:archived         {:optional true} [:maybe :boolean]]]]
+  (try
+    (validation/check-has-application-permission :monitoring)
+    (catch clojure.lang.ExceptionInfo _e
+      (validation/check-has-application-permission :subscription false)))
+
   ;; fetch the existing Alert in the DB
-  (let [alert-before-update (api/check-404 (pulse/retrieve-alert id))]
+  (let [alert-before-update                   (api/check-404 (models.pulse/retrieve-alert id))
+        current-user-has-application-permissions? (and (premium-features/enable-advanced-permissions?)
+                                                       (resolve 'metabase-enterprise.advanced-permissions.common/current-user-has-application-permissions?))
+        has-subscription-perms?               (and current-user-has-application-permissions?
+                                                   (current-user-has-application-permissions? :subscription))
+        has-monitoring-permissions?           (and current-user-has-application-permissions?
+                                                   (current-user-has-application-permissions? :monitoring))]
     (assert (:card alert-before-update)
             (tru "Invalid Alert: Alert does not have a Card associated with it"))
     ;; check permissions as needed.
     ;; Check permissions to update existing Card
-    (api/write-check Card (u/the-id (:card alert-before-update)))
+    (api/read-check :model/Card (u/the-id (:card alert-before-update)))
     ;; if trying to change the card, check perms for that as well
     (when card
-      (api/write-check Card (u/the-id card)))
-    ;; Make sure that non-admins cannot explicitly archive an alert or change recipients
-    (when (not api/*is-superuser?*)
+      (api/write-check :model/Card (u/the-id card)))
+
+    (when-not (or api/*is-superuser?*
+                  has-monitoring-permissions?
+                  has-subscription-perms?)
       (api/check (= (-> alert-before-update :creator :id) api/*current-user-id*)
-                 [400 "Non-admin users are only allowed to update alerts that they created"])
+                 [403 (tru "Non-admin users without monitoring or subscription permissions are only allowed to update alerts that they created")])
       (api/check (or (not (contains? alert-updates :channels))
                      (and (= 1 (count channels))
                           ;; Non-admin alerts can only include the creator as a recipient
                           (= [api/*current-user-id*]
                              (map :id (:recipients (email-channel alert-updates))))))
-                 [400 "Non-admin users are not allowed to modify the channels for an alert"]))
+                 [403 (tru "Non-admin users without monitoring or subscription permissions are not allowed to modify the channels for an alert")]))
+
+    ;; only admin or users with subscription permissions can add recipients
+    (let [to-add-recipients (difference (set (map :id (:recipients (email-channel alert-updates))))
+                                        (set (map :id (:recipients (email-channel alert-before-update)))))]
+      (api/check (or api/*is-superuser?*
+                     has-subscription-perms?
+                     (empty? to-add-recipients))
+                 [403 (tru "Non-admin users without subscription permissions are not allowed to add recipients")]))
+
     ;; now update the Alert
-    (let [updated-alert (pulse/update-alert!
+    (let [updated-alert (models.pulse/update-alert!
                          (merge
                           (assoc (only-alert-keys alert-updates)
                                  :id id)
                           (when card
-                            {:card (pulse/card->ref card)})
+                            {:card (models.pulse/card->ref card)})
                           (when (contains? alert-updates :channels)
                             {:channels channels})
                           ;; automatically archive alert if it now has no recipients
@@ -189,28 +234,34 @@
                                      (not (seq (:recipients (email-channel alert-updates))))
                                      (not (slack-channel alert-updates)))
                             {:archived true})))]
-
-      ;; Only admins can update recipients or explicitly archive an alert
-      (when (and api/*is-superuser?* (email/email-configured?))
+      ;; Only admins or users has subscription or monitoring perms
+      ;; can update recipients or explicitly archive an alert
+      (when (and (or api/*is-superuser?*
+                     has-subscription-perms?
+                     has-monitoring-permissions?)
+                 (email/email-configured?))
         (if archived
           (notify-on-archive-if-needed! updated-alert)
           (notify-recipient-changes! alert-before-update updated-alert)))
       ;; Finally, return the updated Alert
       updated-alert)))
 
-(api/defendpoint DELETE "/:id/subscription"
-  "Unsubscribes a user from the given alert"
-  [id]
-  (let [alert (pulse/retrieve-alert id)]
+(api.macros/defendpoint :delete "/:id/subscription"
+  "For users to unsubscribe themselves from the given alert."
+  [{:keys [id]} :- [:map
+                    [:id ms/PositiveInt]]]
+  (validation/check-has-application-permission :subscription false)
+  (let [alert (models.pulse/retrieve-alert id)]
     (api/read-check alert)
     (api/let-404 [alert-id (u/the-id alert)
-                  pc-id    (db/select-one-id PulseChannel :pulse_id alert-id :channel_type "email")
-                  pcr-id   (db/select-one-id PulseChannelRecipient :pulse_channel_id pc-id :user_id api/*current-user-id*)]
-      (db/delete! PulseChannelRecipient :id pcr-id))
-    ;; Send emails letting people know they have been unsubscribe
-    (when (email/email-configured?)
-      (messages/send-you-unsubscribed-alert-email! alert @api/*current-user*))
+                  pc-id    (t2/select-one-pk :model/PulseChannel :pulse_id alert-id :channel_type "email")
+                  pcr-id   (t2/select-one-pk :model/PulseChannelRecipient :pulse_channel_id pc-id :user_id api/*current-user-id*)]
+      (t2/delete! :model/PulseChannelRecipient :id pcr-id))
+    ;; Send emails letting people know they have been unsubscribed
+    (let [user @api/*current-user*]
+      (when (email/email-configured?)
+        (messages/send-you-unsubscribed-alert-email! alert user))
+      (events/publish-event! :event/alert-unsubscribe {:object {:email (:email user)}
+                                                       :user-id api/*current-user-id*}))
     ;; finally, return a 204 No Content
     api/generic-204-no-content))
-
-(api/define-routes)

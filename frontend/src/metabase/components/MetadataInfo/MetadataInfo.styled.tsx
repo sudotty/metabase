@@ -1,9 +1,9 @@
 import styled from "@emotion/styled";
 
-import { color } from "metabase/lib/colors";
-import Icon from "metabase/components/Icon";
-import { isReducedMotionPreferred } from "metabase/lib/dom";
 import _LoadingSpinner from "metabase/components/LoadingSpinner";
+import { color } from "metabase/lib/colors";
+import { isReducedMotionPreferred } from "metabase/lib/dom";
+import { Icon } from "metabase/ui";
 
 const TRANSITION_DURATION = () => (isReducedMotionPreferred() ? "0" : "0.25s");
 
@@ -30,27 +30,17 @@ export const InfoContainer = styled(Container)`
   padding: 1.1em;
 `;
 
-export const Description = styled.div`
-  white-space: pre-line;
-  max-height: 200px;
-  overflow: auto;
-`;
-
-export const EmptyDescription = styled(Description)`
-  color: ${color("text-light")};
-  font-weight: 700;
-`;
-
 export const LabelContainer = styled.div`
   display: inline-flex;
   align-items: center;
   column-gap: 0.3em;
   font-size: 1em;
+  font-weight: normal;
   color: ${({ color: _color = "brand" }) => color(_color)};
+  margin-bottom: 0.5rem;
 `;
 
 export const Label = styled.span`
-  font-weight: bold;
   font-size: 1em;
   line-height: 1em;
 `;
@@ -60,19 +50,11 @@ export const RelativeSizeIcon = styled(Icon)`
   width: 1em;
 `;
 
-export const InvertedColorRelativeSizeIcon = styled(RelativeSizeIcon)`
-  background-color: ${color("brand")};
-  color: ${color("white")};
-  border-radius: 0.3em;
-  padding: 0.3em;
-`;
-
 type FadeProps = {
   visible?: boolean;
 };
 
 export const Fade = styled.div<FadeProps>`
-  position: relative;
   width: 100%;
   transition: opacity ${TRANSITION_DURATION} linear;
   opacity: ${({ visible }) => (visible ? "1" : "0")};
@@ -87,7 +69,7 @@ export const LoadingSpinner = styled(_LoadingSpinner)`
   flex-grow: 1;
   align-self: center;
   justify-content: center;
-  color: ${color("brand")};
+  color: var(--mb-color-brand);
 `;
 
 export const Table = styled.table`

@@ -1,25 +1,29 @@
 (ns metabase.test.data.sparksql
-  (:require [clojure.java.jdbc :as jdbc]
-            [clojure.string :as str]
-            [honeysql.core :as hsql]
-            [honeysql.format :as hformat]
-            [metabase.config :as config]
-            [metabase.driver :as driver]
-            [metabase.driver.sql.query-processor :as sql.qp]
-            [metabase.driver.sql.util :as sql.u]
-            [metabase.driver.sql.util.unprepare :as unprepare]
-            [metabase.test.data.interface :as tx]
-            [metabase.test.data.sql :as sql.tx]
-            [metabase.test.data.sql-jdbc :as sql-jdbc.tx]
-            [metabase.test.data.sql-jdbc.execute :as execute]
-            [metabase.test.data.sql-jdbc.load-data :as load-data]
-            [metabase.test.data.sql.ddl :as ddl]
-            [metabase.util :as u]))
+  (:require
+   [clojure.java.jdbc :as jdbc]
+   [clojure.string :as str]
+   [metabase.driver :as driver]
+   [metabase.driver.ddl.interface :as ddl.i]
+   [metabase.driver.sql.query-processor :as sql.qp]
+   [metabase.driver.sql.util :as sql.u]
+   [metabase.test.data.interface :as tx]
+   [metabase.test.data.sql :as sql.tx]
+   [metabase.test.data.sql-jdbc :as sql-jdbc.tx]
+   [metabase.test.data.sql-jdbc.execute :as execute]
+   [metabase.test.data.sql-jdbc.load-data :as load-data]
+   [metabase.test.data.sql.ddl :as ddl]
+   [metabase.util :as u]
+   [metabase.util.log :as log]))
+
+(set! *warn-on-reflection* true)
 
 (sql-jdbc.tx/add-test-extensions! :sparksql)
 
-;; during unit tests don't treat Spark SQL as having FK support
-(defmethod driver/supports? [:sparksql :foreign-keys] [_ _] (not config/is-test?))
+(doseq [feature [:test/time-type
+                 :test/timestamptz-type]]
+  (defmethod driver/database-supports? [:sparksql feature]
+    [_driver _feature _database]
+    false))
 
 (doseq [[base-type database-type] {:type/BigInteger "BIGINT"
                                    :type/Boolean    "BOOLEAN"
@@ -35,13 +39,13 @@
 (defmethod sql.tx/field-base-type->sql-type [:sparksql :type/Time] [_ _]
   (throw (UnsupportedOperationException. "SparkSQL does not have a TIME data type.")))
 
-(defmethod tx/format-name :sparksql
+(defmethod ddl.i/format-name :sparksql
   [_ s]
   (str/replace s #"-" "_"))
 
 (defmethod sql.tx/qualified-name-components :sparksql
   [driver & args]
-  [(tx/format-name driver (u/qualified-name (last args)))])
+  [(ddl.i/format-name driver (u/qualified-name (last args)))])
 
 (defmethod tx/dbdef->connection-details :sparksql
   [driver context {:keys [database-name]}]
@@ -51,39 +55,58 @@
     :user     (tx/db-test-env-var-or-throw :sparksql :user "admin")
     :password (tx/db-test-env-var-or-throw :sparksql :password "admin")}
    (when (= context :db)
-     {:db (tx/format-name driver database-name)})))
+     {:db (ddl.i/format-name driver database-name)})))
 
-(defmethod ddl/insert-rows-ddl-statements :sparksql
+(defprotocol ^:private Inline
+  (^:private ->inline [this]))
+
+(extend-protocol Inline
+  nil
+  (->inline [_] nil)
+
+  Object
+  (->inline [obj]
+    [:raw (sql.qp/inline-value :sparksql obj)]))
+
+(defmethod ddl/insert-rows-honeysql-form :sparksql
   [driver table-identifier row-or-rows]
-  [(unprepare/unprepare driver
-     (binding [hformat/*subquery?* false]
-       (hsql/format (ddl/insert-rows-honeysql-form driver table-identifier row-or-rows)
-         :quoting             (sql.qp/quote-style driver)
-         :allow-dashed-names? false)))])
+  (let [rows (u/one-or-many row-or-rows)
+        rows (for [row rows]
+               (update-vals row
+                            (fn [val]
+                              (if (and (vector? val)
+                                       (= (first val) :metabase.driver.sql.query-processor/compiled))
+                                val
+                                (->inline val)))))]
+    ((get-method ddl/insert-rows-honeysql-form :sql/test-extensions) driver table-identifier rows)))
+
+;;; since we're not parameterizing these statements at all we can load data in bigger chunks than the default 200. For
+;;; bigger tables like ORDERS this means loading data takes ~11 seconds instead of ~60
+(defmethod load-data/chunk-size :sparksql
+  [_driver _dbdef _tabledef]
+  1000)
 
 (defmethod load-data/do-insert! :sparksql
-  [driver spec table-identifier row-or-rows]
-  (let [statements (ddl/insert-rows-ddl-statements driver table-identifier row-or-rows)]
-    (with-open [conn (jdbc/get-connection spec)]
-      (try
-        (.setAutoCommit conn false)
-        (doseq [sql+args statements]
-          (jdbc/execute! {:connection conn} sql+args {:transaction? false}))
-        (catch java.sql.SQLException e
-          (println "Error inserting data:" (u/pprint-to-str 'red statements))
-          (jdbc/print-sql-exception-chain e)
-          (throw e))))))
+  [driver ^java.sql.Connection conn table-identifier rows]
+  (let [statements (ddl/insert-rows-dml-statements driver table-identifier rows)]
+    (try
+      (.setAutoCommit conn true)
+      (doseq [sql+args statements]
+        (jdbc/execute! {:connection conn} sql+args {:transaction? false}))
+      (catch java.sql.SQLException e
+        (log/infof "Error inserting data: %s" (u/pprint-to-str 'red statements))
+        (jdbc/print-sql-exception-chain e)
+        (throw e)))))
 
-(defmethod load-data/load-data! :sparksql [& args]
-  (apply load-data/load-data-add-ids! args))
+(defmethod load-data/row-xform :sparksql
+  [_driver _dbdef tabledef]
+  (load-data/maybe-add-ids-xform tabledef))
 
 (defmethod sql.tx/create-table-sql :sparksql
   [driver {:keys [database-name]} {:keys [table-name field-definitions]}]
-  (let [quote-name    #(sql.u/quote-name driver :field (tx/format-name driver %))
-        pk-field-name (quote-name (sql.tx/pk-field-name driver))]
-    (format "CREATE TABLE %s (%s %s, %s)"
+  (let [quote-name #(sql.u/quote-name driver :field (ddl.i/format-name driver %))]
+    (format "CREATE TABLE %s (%s)"
             (sql.tx/qualify-and-quote driver database-name table-name)
-            pk-field-name (sql.tx/pk-sql-type driver)
             (->> field-definitions
                  (map (fn [{:keys [field-name base-type]}]
                         (format "%s %s" (quote-name field-name) (if (map? base-type)

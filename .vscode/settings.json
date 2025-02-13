@@ -1,7 +1,11 @@
 {
-    "typescript.tsc.autoDetect": "off",
-    "grunt.autoDetect": "off",
-    "jake.autoDetect": "off",
-    "gulp.autoDetect": "off",
-    "npm.autoDetect": "off"
+  "typescript.tsc.autoDetect": "off",
+  "grunt.autoDetect": "off",
+  "jake.autoDetect": "off",
+  "gulp.autoDetect": "off",
+  "npm.autoDetect": "off",
+  "eslint.options": {
+    "rulePaths": ["frontend/lint/eslint-rules/"]
+  },
+  "typescript.tsdk": "node_modules/typescript/lib"
 }

@@ -1,16 +1,58 @@
-import { createEntity } from "metabase/lib/entities";
-
-import { SegmentSchema } from "metabase/schema";
+import {
+  segmentApi,
+  useGetSegmentQuery,
+  useListSegmentsQuery,
+} from "metabase/api";
 import { color } from "metabase/lib/colors";
+import { createEntity, entityCompatibleQuery } from "metabase/lib/entities";
 import * as Urls from "metabase/lib/urls";
-
+import { SegmentSchema } from "metabase/schema";
 import { getMetadata } from "metabase/selectors/metadata";
 
+/**
+ * @deprecated use "metabase/api" instead
+ */
 const Segments = createEntity({
   name: "segments",
   nameOne: "segment",
   path: "/api/segment",
   schema: SegmentSchema,
+
+  rtk: {
+    getUseGetQuery: () => ({
+      useGetQuery,
+    }),
+    useListQuery: useListSegmentsQuery,
+  },
+
+  api: {
+    list: (entityQuery, dispatch) =>
+      entityCompatibleQuery(
+        entityQuery,
+        dispatch,
+        segmentApi.endpoints.listSegments,
+      ),
+    get: (entityQuery, options, dispatch) =>
+      entityCompatibleQuery(
+        entityQuery.id,
+        dispatch,
+        segmentApi.endpoints.getSegment,
+      ),
+    create: (entityQuery, dispatch) =>
+      entityCompatibleQuery(
+        entityQuery,
+        dispatch,
+        segmentApi.endpoints.createSegment,
+      ),
+    update: (entityQuery, dispatch) =>
+      entityCompatibleQuery(
+        entityQuery,
+        dispatch,
+        segmentApi.endpoints.updateSegment,
+      ),
+    delete: ({ id }, dispatch) =>
+      entityCompatibleQuery(id, dispatch, segmentApi.endpoints.deleteSegment),
+  },
 
   objectActions: {
     setArchived: (
@@ -36,13 +78,13 @@ const Segments = createEntity({
         null,
         segment.id,
       ),
-    getColor: segment => color("accent7"),
+    getColor: segment => color("filter"),
     getIcon: segment => ({ name: "segment" }),
   },
-
-  form: {
-    fields: [{ name: "name" }, { name: "description", type: "text" }],
-  },
 });
+
+const useGetQuery = ({ id }, options) => {
+  return useGetSegmentQuery(id, options);
+};
 
 export default Segments;

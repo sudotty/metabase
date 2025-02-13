@@ -1,21 +1,23 @@
-import React, { ReactNode, useState } from "react";
+import type { ReactNode } from "react";
+import { useState } from "react";
 import { t } from "ttag";
+
 import {
-  SectionRoot,
-  SectionHeader,
-  SectionContainer,
-  SectionTitle,
-  SectionDescription,
   SectionButton,
+  SectionContainer,
+  SectionDescription,
+  SectionHeader,
+  SectionRoot,
+  SectionTitle,
 } from "./SetupSection.styled";
 
-export interface SetupSectionProps {
+interface SetupSectionProps {
   title: ReactNode;
   description?: ReactNode;
   children?: ReactNode;
 }
 
-const SetupSection = ({
+export const SetupSection = ({
   title,
   description,
   children,
@@ -41,5 +43,3 @@ const SetupSection = ({
     </SectionRoot>
   );
 };
-
-export default SetupSection;

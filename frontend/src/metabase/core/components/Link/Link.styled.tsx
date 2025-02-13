@@ -1,23 +1,40 @@
+import { css } from "@emotion/react";
 import styled from "@emotion/styled";
-import { display, space, hover, color } from "styled-system";
-import { Link } from "react-router";
-import { color as colors } from "metabase/lib/colors";
+import { Link, type LinkProps } from "react-router";
 
-export const LinkRoot = styled(Link)`
-  ${display};
-  ${space};
-  ${hover};
-  ${color};
+import { doNotForwardProps } from "metabase/common/utils/doNotForwardProps";
+import { focusOutlineStyle } from "metabase/core/style/input";
 
+type LinkVariantProp = { variant?: "default" | "brand" | "brandBold" };
+
+export const LinkRoot = styled(
+  Link,
+  doNotForwardProps("variant"),
+)<LinkVariantProp>`
   opacity: ${props => (props.disabled ? "0.4" : "")};
   pointer-events: ${props => (props.disabled ? "none" : "")};
   transition: opacity 0.3s linear;
 
-  &:focus {
-    outline: 2px solid ${colors("focus")};
-  }
+  ${focusOutlineStyle("brand")};
 
-  &:focus:not(:focus-visible) {
-    outline: none;
-  }
-`;
+  ${props => variants[props.variant ?? "default"] ?? ""}
+` as unknown as React.FC<LinkProps & LinkVariantProp>;
+
+const variants = {
+  default: "",
+  brand: css`
+    color: var(--mb-color-brand);
+
+    &:hover {
+      text-decoration: underline;
+    }
+  `,
+  brandBold: css`
+    color: var(--mb-color-brand);
+    font-weight: bold;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  `,
+};

@@ -1,60 +1,61 @@
 (ns metabase.query-processor.middleware.resolve-joined-fields-test
-  (:require [clojure.test :refer :all]
-            [metabase.query-processor :as qp]
-            [metabase.query-processor.middleware.resolve-joined-fields :as resolve-joined-fields]
-            [metabase.test :as mt]
-            [metabase.util :as u]
-            [schema.core :as s]))
+  (:require
+   [clojure.test :refer :all]
+   [metabase.query-processor :as qp]
+   [metabase.query-processor.middleware.resolve-joined-fields
+    :as resolve-joined-fields]
+   [metabase.test :as mt]
+   [metabase.util :as u]))
 
 (defn- wrap-joined-fields [query]
-  (mt/with-everything-store
+  (mt/with-metadata-provider (mt/id)
     (resolve-joined-fields/resolve-joined-fields query)))
 
 (deftest wrap-fields-in-joined-field-test
-  (is (= (mt/mbql-query checkins
-           {:filter [:!= [:field %users.name {:join-alias "u"}] nil]
-            :joins  [{:source-table $$users
-                      :alias        "u"
-                      :condition    [:= $user_id &u.users.id]}]})
-         (wrap-joined-fields
-          (mt/mbql-query checkins
-            {:filter [:!= [:field %users.name nil] nil]
+  (is (=? (mt/mbql-query checkins
+            {:filter [:!= [:field %users.name {:join-alias "u"}] nil]
              :joins  [{:source-table $$users
                        :alias        "u"
-                       :condition    [:= $user_id &u.users.id]}]}))))
+                       :condition    [:= $user_id &u.users.id]}]})
+          (wrap-joined-fields
+           (mt/mbql-query checkins
+             {:filter [:!= [:field %users.name nil] nil]
+              :joins  [{:source-table $$users
+                        :alias        "u"
+                        :condition    [:= $user_id &u.users.id]}]}))))
   (testing "Do we correctly recurse into `:source-query`"
-    (is (= (mt/mbql-query checkins
-             {:source-query {:filter [:!= [:field %users.name {:join-alias "u"}] nil]
-                             :joins  [{:source-table $$users
-                                       :alias        "u"
-                                       :condition    [:= $user_id &u.users.id]}]}})
-           (wrap-joined-fields
-            (mt/mbql-query checkins
-              {:source-query {:filter [:!= [:field %users.name nil] nil]
+    (is (=? (mt/mbql-query checkins
+              {:source-query {:filter [:!= [:field %users.name {:join-alias "u"}] nil]
                               :joins  [{:source-table $$users
                                         :alias        "u"
-                                        :condition    [:= $user_id &u.users.id]}]}}))))))
+                                        :condition    [:= $user_id &u.users.id]}]}})
+            (wrap-joined-fields
+             (mt/mbql-query checkins
+               {:source-query {:filter [:!= [:field %users.name nil] nil]
+                               :joins  [{:source-table $$users
+                                         :alias        "u"
+                                         :condition    [:= $user_id &u.users.id]}]}}))))))
 
 (deftest deduplicate-fields-test
   (testing "resolve-joined-fields should deduplicate :fields after resolving stuff"
-    (is (= (mt/mbql-query checkins
-             {:fields [[:field %users.name {:join-alias "u"}]]
-              :filter [:!= [:field %users.name {:join-alias "u"}] nil]
-              :joins  [{:source-table $$users
-                        :alias        "u"
-                        :condition    [:= $user_id &u.users.id]}]})
-           (wrap-joined-fields
-            (mt/mbql-query checkins
-              {:fields [[:field %users.name nil]
-                        [:field %users.name {:join-alias "u"}]]
-               :filter [:!= [:field %users.name nil] nil]
+    (is (=? (mt/mbql-query checkins
+              {:fields [[:field %users.name {:join-alias "u"}]]
+               :filter [:!= [:field %users.name {:join-alias "u"}] nil]
                :joins  [{:source-table $$users
                          :alias        "u"
-                         :condition    [:= $user_id &u.users.id]}]}))))))
+                         :condition    [:= $user_id &u.users.id]}]})
+            (wrap-joined-fields
+             (mt/mbql-query checkins
+               {:fields [[:field %users.name nil]
+                         [:field %users.name {:join-alias "u"}]]
+                :filter [:!= [:field %users.name nil] nil]
+                :joins  [{:source-table $$users
+                          :alias        "u"
+                          :condition    [:= $user_id &u.users.id]}]}))))))
 
 (deftest resolve-joined-fields-in-source-queries-test
   (testing "Should be able to resolve joined fields at any level of the query (#13642)"
-    (mt/dataset sample-dataset
+    (mt/dataset test-data
       (testing "simple query"
         (let [query (mt/mbql-query nil
                       {:source-query {:source-table $$orders
@@ -104,10 +105,8 @@
                              (mt/$ids [:= [:field %products.category {:join-alias "products"}] "Widget"]))
                    (wrap-joined-fields joins-in-joins-query)))
             (testing "Can we actually run the join-in-joins query?"
-              (is (schema= {:status    (s/eq :completed)
-                            :row_count (s/eq 1)
-                            s/Keyword  s/Any}
-                           (qp/process-query (assoc-in joins-in-joins-query [:query :limit] 1))))))))
+              (is (=? {:status :completed, :row_count 1}
+                      (qp/process-query (assoc-in joins-in-joins-query [:query :limit] 1))))))))
 
       (testing "multiple joins in joins query"
         (let [joins-in-joins-query
@@ -159,7 +158,7 @@
 
 (deftest multiple-joins-to-same-table-test
   (testing "Should prefer EXPLICIT joins when resolving joined fields and both implicit/explicit joins are present"
-    (mt/dataset sample-dataset
+    (mt/dataset test-data
       (let [query (mt/mbql-query orders
                     {:filter [:= $products.category "Widget"]
                      :joins  [{:source-table $$products
@@ -189,36 +188,35 @@
         (testing "Middleware should handle the query"
           (is (some? (wrap-joined-fields query))))
         (testing "Should be able tor run query end-to-end"
-          (is (schema= {:status    (s/eq :completed)
-                        :row_count (s/eq 10)
-                        s/Keyword  s/Any}
-                       (qp/process-query query))))))))
+          (is (=? {:status    :completed
+                   :row_count 10}
+                  (qp/process-query query))))))))
 
 (deftest handle-unwrapped-joined-fields-correctly-test
-  (mt/dataset sample-dataset
+  (mt/dataset test-data
     (testing "References to joined fields in a join in a source query should be resolved correctly #(14766)"
-      (is (= (mt/mbql-query orders
-               {:source-query {:source-table $$orders
-                               :joins        [{:source-table $$products
-                                               :condition    [:= $product_id &Products.products.id]
-                                               :alias        "Products"}]}
-                :aggregation  [[:count]]
-                :breakout     [&Products.products.id]
-                :limit        5})
-             (wrap-joined-fields
-              (mt/mbql-query orders
+      (is (=? (mt/mbql-query orders
                 {:source-query {:source-table $$orders
                                 :joins        [{:source-table $$products
                                                 :condition    [:= $product_id &Products.products.id]
                                                 :alias        "Products"}]}
                  :aggregation  [[:count]]
-                 :breakout     [$products.id]
-                 :limit        5})))))))
+                 :breakout     [&Products.products.id]
+                 :limit        5})
+              (wrap-joined-fields
+               (mt/mbql-query orders
+                 {:source-query {:source-table $$orders
+                                 :joins        [{:source-table $$products
+                                                 :condition    [:= $product_id &Products.products.id]
+                                                 :alias        "Products"}]}
+                  :aggregation  [[:count]]
+                  :breakout     [$products.id]
+                  :limit        5})))))))
 
 (deftest do-not-rewrite-top-level-clauses-if-field-is-from-source-table-or-query
   (testing (str "Do not add `:join-alias` to top-level `:field` clauses if the Field could come from the "
                 "`:source-table` or `:source-query` (#18502)")
-    (mt/dataset sample-dataset
+    (mt/dataset test-data
       (is (query= (mt/mbql-query people
                     {:source-query {:source-table $$people
                                     :breakout     [!month.created_at]

@@ -9,15 +9,19 @@
 
     # just test against :h2 (default)
     DRIVERS=h2"
-  (:require [clojure.tools.logging :as log]
-            [colorize.core :as color]
-            [metabase.test.data.env.impl :as impl]
-            [metabase.test.initialize :as initialize]))
+  (:require
+   [colorize.core :as colorize]
+   [metabase.test.data.env.impl :as tx.env.impl]
+   [metabase.test.initialize :as initialize]))
+
+(set! *warn-on-reflection* true)
 
 (defonce ^:private env-test-drivers
   (delay
-    (let [drivers (impl/get-test-drivers)]
-      (log/info (color/cyan "Running QP tests against these drivers: " drivers))
+    (let [drivers (tx.env.impl/get-test-drivers)]
+      ;; this is println on purpose so it always shows up regardless of log level
+      #_{:clj-kondo/ignore [:discouraged-var]}
+      (println (colorize/cyan "Running QP tests against these drivers: " drivers))
       (when-not (= drivers #{:h2})
         (initialize/initialize-if-needed! :plugins))
       drivers)))
@@ -31,10 +35,10 @@
   {:pre [((some-fn sequential? set?) drivers)]}
   (reset! default-test-drivers (set drivers)))
 
-(def ^:private ^:dynamic *test-drivers*
-  (fn []
-    (or @default-test-drivers
-        @env-test-drivers)))
+(defn- ^:dynamic *test-drivers*
+  []
+  (or @default-test-drivers
+      @env-test-drivers))
 
 (defn do-with-test-drivers [drivers thunk]
   {:pre [((some-fn sequential? set?) drivers)]}

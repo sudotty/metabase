@@ -1,15 +1,14 @@
-import TextInput from "metabase/components/TextInput";
-import { color } from "metabase/lib/colors";
 import styled from "@emotion/styled";
+
+import Input from "metabase/core/components/Input";
 
 export const LicenseInputContainer = styled.div`
   display: flex;
   flex-wrap: nowrap;
-  // min-width: 680px;
-  width: 680px;
+  width: 100%;
 `;
 
-export const LicenseTextInput = styled(TextInput)`
+export const LicenseTextInput = styled(Input)`
   flex-grow: 1;
   margin-right: 8px;
 `;
@@ -17,5 +16,5 @@ export const LicenseTextInput = styled(TextInput)`
 export const LicenseErrorMessage = styled.div`
   margin-top: 8px;
   white-space: nowrap;
-  color: ${color("error")};
+  color: var(--mb-color-error);
 `;

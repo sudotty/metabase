@@ -1,29 +1,37 @@
-import { createEntity } from "metabase/lib/entities";
+import { assocIn, updateIn } from "icepick";
+import { normalize } from "normalizr";
+import { useMemo } from "react";
+import { t } from "ttag";
+
+import {
+  fieldApi,
+  skipToken,
+  useGetFieldQuery,
+  useGetFieldValuesQuery,
+} from "metabase/api";
+import {
+  createEntity,
+  entityCompatibleQuery,
+  notify,
+} from "metabase/lib/entities";
 import {
   compose,
+  createAction,
+  createThunkAction,
+  handleActions,
+  updateData,
   withAction,
   withCachedDataAndRequestState,
   withNormalize,
-  handleActions,
-  createAction,
-  createThunkAction,
-  updateData,
 } from "metabase/lib/redux";
-import { normalize } from "normalizr";
-import { assocIn, updateIn } from "icepick";
-
 import { FieldSchema } from "metabase/schema";
-import { MetabaseApi } from "metabase/services";
-
-import { getMetadata } from "metabase/selectors/metadata";
-
 import {
-  field_visibility_types,
-  field_semantic_types,
-  has_field_values_options,
-} from "metabase/lib/core";
-import { getFieldValues, getRemappings } from "metabase/lib/query/field";
-import { TYPE } from "metabase/lib/types";
+  getMetadata,
+  getMetadataUnfiltered,
+} from "metabase/selectors/metadata";
+import { MetabaseApi } from "metabase/services";
+import { getUniqueFieldId } from "metabase-lib/v1/metadata/utils/fields";
+import { getFieldValues } from "metabase-lib/v1/queries/utils/field";
 
 // ADDITIONAL OBJECT ACTIONS
 
@@ -41,27 +49,46 @@ export const ADD_REMAPPINGS = "metabase/entities/fields/ADD_REMAPPINGS";
 export const ADD_PARAM_VALUES = "metabase/entities/fields/ADD_PARAM_VALUES";
 export const ADD_FIELDS = "metabase/entities/fields/ADD_FIELDS";
 
+/**
+ * @deprecated use "metabase/api" instead
+ */
 const Fields = createEntity({
   name: "fields",
   path: "/api/field",
   schema: FieldSchema,
+
+  rtk: {
+    getUseGetQuery: fetchType => {
+      if (fetchType === "fetchFieldValues") {
+        return {
+          useGetQuery: useGetFetchFieldValuesQuery,
+        };
+      }
+
+      return {
+        useGetQuery: useGetFieldQuery,
+      };
+    },
+  },
+
+  api: {
+    get: (entityQuery, options, dispatch) =>
+      entityCompatibleQuery(entityQuery, dispatch, fieldApi.endpoints.getField),
+    update: (entityQuery, dispatch) =>
+      entityCompatibleQuery(
+        entityQuery,
+        dispatch,
+        fieldApi.endpoints.updateField,
+      ),
+  },
 
   selectors: {
     getObject: (state, { entityId }) => getMetadata(state).field(entityId),
 
     // getMetadata filters out sensitive fields by default.
     // This selector is used in the data model when we want to show them.
-    getObjectUnfiltered: (state, { entityId }) => {
-      const field = state.entities.fields[entityId];
-      return (
-        field && {
-          ...field,
-          values: getFieldValues(field),
-          remapping: new Map(getRemappings(field)),
-          target: state.entities.fields[field.fk_target_field_id],
-        }
-      );
-    },
+    getObjectUnfiltered: (state, { entityId }) =>
+      getMetadataUnfiltered(state).field(entityId),
     getFieldValues: (state, { entityId }) => {
       const field = state.entities.fields[entityId];
       return field ? getFieldValues(field) : [];
@@ -74,61 +101,91 @@ const Fields = createEntity({
     fetchFieldValues: compose(
       withAction(FETCH_FIELD_VALUES),
       withCachedDataAndRequestState(
-        ({ id }) => [...Fields.getObjectStatePath(id)],
-        ({ id }) => [...Fields.getObjectStatePath(id), "values"],
-        entityQuery => Fields.getQueryKey(entityQuery),
+        ({ id, table_id }) => {
+          const uniqueId = getUniqueFieldId({ id, table_id });
+          return [...Fields.getObjectStatePath(uniqueId)];
+        },
+        ({ id, table_id }) => {
+          const uniqueId = getUniqueFieldId({ id, table_id });
+          return [...Fields.getObjectStatePath(uniqueId), "values"];
+        },
+        field => {
+          return Fields.getQueryKey({ id: field.id });
+        },
       ),
       withNormalize(FieldSchema),
-    )(({ id: fieldId }) => async (dispatch, getState) => {
-      const { field_id: id, values } = await MetabaseApi.field_values({
-        fieldId,
+    )(field => async dispatch => {
+      const { field_id, ...data } = await MetabaseApi.field_values({
+        fieldId: field.id,
       });
-      return { id, values };
+      const table_id = field.table_id;
+
+      // table_id is required for uniqueFieldId as it's a way to know if field is virtual
+      return { id: field_id, ...data, ...(table_id && { table_id }) };
     }),
 
+    updateField(field, values, opts) {
+      return async (dispatch, getState) => {
+        const result = await dispatch(
+          Fields.actions.update(
+            { id: field.id },
+            values,
+            notify(opts, field.displayName(), t`updated`),
+          ),
+        );
+
+        // field values needs to be fetched again once the field is updated metabase#16322
+        await dispatch(
+          Fields.actions.fetchFieldValues(field, { reload: true }),
+        );
+
+        return result;
+      };
+    },
     // Docstring from m.api.field:
     // Update the human-readable values for a `Field` whose semantic type is
     // `category`/`city`/`state`/`country` or whose base type is `type/Boolean`."
     updateFieldValues: createThunkAction(
       UPDATE_FIELD_VALUES,
-      ({ id }, fieldValuePairs) => (dispatch, getState) =>
-        updateData({
-          dispatch,
-          getState,
-          requestStatePath: ["entities", "fields", id, "dimension"],
-          existingStatePath: ["entities", "fields", id],
-          putData: () =>
-            MetabaseApi.field_values_update({
-              fieldId: id,
-              values: fieldValuePairs,
-            }),
-        }),
+      ({ id }, fieldValuePairs) =>
+        (dispatch, getState) =>
+          updateData({
+            dispatch,
+            getState,
+            requestStatePath: ["entities", "fields", id, "dimension"],
+            existingStatePath: ["entities", "fields", id],
+            putData: () =>
+              entityCompatibleQuery(
+                {
+                  id,
+                  values: fieldValuePairs,
+                },
+                dispatch,
+                fieldApi.endpoints.updateFieldValues,
+              ),
+          }),
     ),
     updateFieldDimension: createThunkAction(
       UPDATE_FIELD_DIMENSION,
-      ({ id }, dimension) => (dispatch, getState) =>
-        updateData({
-          dispatch,
-          getState,
-          requestStatePath: ["entities", "fields", id, "dimension"],
-          existingStatePath: ["entities", "fields", id],
-          putData: () =>
-            MetabaseApi.field_dimension_update({
-              fieldId: id,
-              ...dimension,
-            }),
-        }),
+      ({ id }, dimension) =>
+        dispatch =>
+          entityCompatibleQuery(
+            { id, ...dimension },
+            dispatch,
+            fieldApi.endpoints.createFieldDimension,
+          ),
     ),
     deleteFieldDimension: createThunkAction(
       DELETE_FIELD_DIMENSION,
-      ({ id }) => (dispatch, getState) =>
-        updateData({
-          dispatch,
-          getState,
-          requestStatePath: ["entities", "fields", id, "dimension"],
-          existingStatePath: ["entities", "fields", id],
-          putData: () => MetabaseApi.field_dimension_delete({ fieldId: id }),
-        }),
+      ({ id }) =>
+        async dispatch => {
+          await entityCompatibleQuery(
+            id,
+            dispatch,
+            fieldApi.endpoints.deleteFieldDimension,
+          );
+          return { id };
+        },
     ),
 
     addRemappings: createAction(ADD_REMAPPINGS, ({ id }, remappings) => ({
@@ -164,41 +221,53 @@ const Fields = createEntity({
         updateIn(state, [fieldId, "remappings"], (existing = []) =>
           Array.from(new Map(existing.concat(remappings))),
         ),
+      // cannot use `UPDATE_TABLE_FIELD_ORDER` because of the dependency cycle
+      ["metabase/entities/UPDATE_TABLE_FIELD_ORDER"]: (
+        state,
+        { payload: { fieldOrder } },
+      ) => {
+        fieldOrder.forEach((fieldId, index) => {
+          state = assocIn(state, [fieldId, "position"], index);
+        });
+
+        return state;
+      },
+      [UPDATE_FIELD_DIMENSION]: (state, { payload: dimension }) =>
+        assocIn(state, [dimension.field_id, "dimensions"], [dimension]),
+      [DELETE_FIELD_DIMENSION]: (state, { payload: { id } }) =>
+        assocIn(state, [id, "dimensions"], []),
     },
     {},
   ),
-
-  form: {
-    fields: (values = {}) =>
-      [
-        { name: "display_name" },
-        { name: "description" },
-        {
-          name: "visibility_type",
-          type: "select",
-          options: field_visibility_types.map(type => ({
-            name: type.name,
-            value: type.id,
-          })),
-        },
-        {
-          name: "semantic_type",
-          type: "select",
-          options: field_semantic_types.map(type => ({
-            name: type.name,
-            value: type.id,
-          })),
-        },
-        values.semantic_type === TYPE.FK && {
-          name: "fk_target_field_id",
-        },
-        {
-          name: "has_field_values",
-          type: "select",
-          options: has_field_values_options,
-        },
-      ].filter(f => f),
-  },
 });
+
+const useGetFetchFieldValuesQuery = (query, options) => {
+  const tableId = query.table_id;
+  const result = useGetFieldValuesQuery(
+    query === skipToken ? skipToken : query.id,
+    options,
+  );
+
+  const { data } = result;
+  const transformedData = useMemo(() => {
+    return data ? transformFieldValuesData(data, tableId) : data;
+  }, [data, tableId]);
+
+  return useMemo(
+    () => ({ ...result, data: transformedData }),
+    [result, transformedData],
+  );
+};
+
+const transformFieldValuesData = (data, table_id) => {
+  if (!data) {
+    return data;
+  }
+
+  const { field_id, ...rest } = data;
+
+  // table_id is required for uniqueFieldId as it's a way to know if field is virtual
+  return { id: field_id, ...rest, ...(table_id && { table_id }) };
+};
 
 export default Fields;

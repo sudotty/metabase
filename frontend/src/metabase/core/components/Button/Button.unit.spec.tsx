@@ -1,6 +1,7 @@
-import React from "react";
-import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+
+import { render, screen } from "__support__/ui";
+
 import Button from "./Button";
 
 describe("Button", () => {
@@ -18,9 +19,9 @@ describe("Button", () => {
     expect(screen.getByRole("img", { name: "star icon" })).toBeInTheDocument();
   });
 
-  it("should receive focus on tab", () => {
+  it("should receive focus on tab", async () => {
     render(<Button>{title}</Button>);
-    userEvent.tab();
+    await userEvent.tab();
 
     expect(screen.getByRole("button")).toHaveFocus();
   });

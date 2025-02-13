@@ -1,0 +1,42 @@
+{
+  "rules": {
+    "no-restricted-imports": [
+      "error",
+      {
+        "patterns": [
+          {
+            "group": [
+              "metabase/*",
+              "!metabase/env",
+              "!metabase/lib",
+              "!metabase/querying",
+              "!metabase/services"
+            ]
+          },
+          {
+            "group": [
+              "metabase/lib/*",
+              "!metabase/lib/colors",
+              "!metabase/lib/encoding",
+              "!metabase/lib/formatting",
+              "!metabase/lib/time",
+              "!metabase/lib/types",
+              "!metabase/lib/urls",
+              "!metabase/lib/utils"
+            ]
+          }
+        ],
+        "paths": [
+          {
+            "name": "moment",
+            "message": "Moment is deprecated, please use dayjs"
+          },
+          {
+            "name": "moment-timezone",
+            "message": "Moment is deprecated, please use dayjs"
+          }
+        ]
+      }
+    ]
+  }
+}

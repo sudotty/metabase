@@ -1,39 +1,34 @@
-import React, { useMemo, useState } from "react";
-import _ from "underscore";
+import type * as React from "react";
+import { useMemo, useState } from "react";
 import { t } from "ttag";
+import _ from "underscore";
+
+import EmptyState from "metabase/components/EmptyState";
+import LoadingSpinner from "metabase/components/LoadingSpinner";
+import type { InputProps } from "metabase/core/components/Input";
+import Input from "metabase/core/components/Input";
 import { useDebouncedValue } from "metabase/hooks/use-debounced-value";
-import { SEARCH_DEBOUNCE_DURATION } from "metabase/lib/constants";
-import _Checkbox from "metabase/core/components/CheckBox";
-import _EmptyState from "metabase/components/EmptyState";
+import { delay } from "metabase/lib/delay";
+import { Checkbox, Flex } from "metabase/ui";
+import type { RowValue } from "metabase-types/api";
 
 import {
-  OptionContainer,
-  LabelWrapper,
-  OptionsList,
   EmptyStateContainer,
-  FilterInput,
+  FilterInputContainer,
+  OptionContainer,
+  OptionsList,
 } from "./ListField.styled";
+import type { ListFieldProps, Option } from "./types";
+import { isValidOptionItem } from "./utils";
 
-const Checkbox = _Checkbox as any;
-const EmptyState = _EmptyState as any;
-
-type Option = any[];
-
-interface ListFieldProps {
-  onChange: (value: string[]) => void;
-  value: string[];
-  options: Option;
-  optionRenderer: (option: any) => JSX.Element;
-  placeholder: string;
-  isDashboardFilter?: boolean;
-}
+const DEBOUNCE_FILTER_TIME = delay(100);
 
 function createOptionsFromValuesWithoutOptions(
-  values: string[],
+  values: RowValue[],
   options: Option[],
 ): Option {
-  const optionsMap = _.indexBy(options, "0");
-  return values.filter(value => !optionsMap[value]).map(value => [value]);
+  const optionsMap = new Map(options.map(option => [option[0], option]));
+  return values.filter(value => !optionsMap.has(value)).map(value => [value]);
 }
 
 export const ListField = ({
@@ -43,6 +38,7 @@ export const ListField = ({
   optionRenderer,
   placeholder,
   isDashboardFilter,
+  isLoading,
 }: ListFieldProps) => {
   const [selectedValues, setSelectedValues] = useState(new Set(value));
   const [addedOptions, setAddedOptions] = useState<Option>(() =>
@@ -50,7 +46,7 @@ export const ListField = ({
   );
 
   const augmentedOptions = useMemo(() => {
-    return [...options, ...addedOptions];
+    return [...options.filter(option => option[0] != null), ...addedOptions];
   }, [addedOptions, options]);
 
   const sortedOptions = useMemo(() => {
@@ -67,22 +63,38 @@ export const ListField = ({
   }, [augmentedOptions.length]);
 
   const [filter, setFilter] = useState("");
-  const debouncedFilter = useDebouncedValue(filter, SEARCH_DEBOUNCE_DURATION);
+  const debouncedFilter = useDebouncedValue(filter, DEBOUNCE_FILTER_TIME);
 
   const filteredOptions = useMemo(() => {
-    const trimmedFilter = debouncedFilter.trim().toLowerCase();
-
-    if (trimmedFilter.length === 0) {
+    const formattedFilter = debouncedFilter.trim().toLowerCase();
+    if (formattedFilter.length === 0) {
       return sortedOptions;
     }
 
-    return augmentedOptions.filter(option =>
-      option[0]
-        .toString()
-        .toLowerCase()
-        .includes(trimmedFilter),
-    );
+    return augmentedOptions.filter(option => {
+      if (!option || option.length === 0) {
+        return false;
+      }
+
+      // option as: [id, name]
+      if (
+        option.length > 1 &&
+        option[1] &&
+        isValidOptionItem(option[1], formattedFilter)
+      ) {
+        return true;
+      }
+
+      // option as: [id]
+      return isValidOptionItem(option[0], formattedFilter);
+    });
   }, [augmentedOptions, debouncedFilter, sortedOptions]);
+
+  const selectedFilteredOptions = filteredOptions.filter(([value]) =>
+    selectedValues.has(value),
+  );
+  const isAll = selectedFilteredOptions.length === filteredOptions.length;
+  const isNone = selectedFilteredOptions.length === 0;
 
   const shouldShowEmptyState =
     augmentedOptions.length > 0 && filteredOptions.length === 0;
@@ -105,20 +117,36 @@ export const ListField = ({
     }
   };
 
+  const handleFilterChange: InputProps["onChange"] = e =>
+    setFilter(e.target.value);
+
+  const handleToggleAll = () => {
+    const newSelectedValuesSet = new Set(selectedValues);
+    filteredOptions.forEach(([value]) => {
+      if (isAll) {
+        newSelectedValuesSet.delete(value);
+      } else {
+        newSelectedValuesSet.add(value);
+      }
+    });
+    onChange(Array.from(newSelectedValuesSet));
+    setSelectedValues(newSelectedValuesSet);
+  };
+
   return (
     <>
-      <FilterInput
-        isDashboardFilter={isDashboardFilter}
-        padding={isDashboardFilter ? "md" : "sm"}
-        borderRadius={isDashboardFilter ? "md" : "sm"}
-        colorScheme={isDashboardFilter ? "transparent" : "admin"}
-        placeholder={placeholder}
-        value={filter}
-        onChange={setFilter}
-        onKeyDown={handleKeyDown}
-        hasClearButton
-        autoFocus
-      />
+      <FilterInputContainer isDashboardFilter={isDashboardFilter}>
+        <Input
+          fullWidth
+          autoFocus
+          placeholder={placeholder}
+          value={filter}
+          onChange={handleFilterChange}
+          onKeyDown={handleKeyDown}
+          onResetClick={() => setFilter("")}
+          data-testid="list-field"
+        />
+      </FilterInputContainer>
 
       {shouldShowEmptyState && (
         <EmptyStateContainer>
@@ -126,19 +154,45 @@ export const ListField = ({
         </EmptyStateContainer>
       )}
 
-      <OptionsList isDashboardFilter={isDashboardFilter}>
-        {filteredOptions.map(option => (
-          <OptionContainer key={option[0]}>
-            <Checkbox
-              data-testid={`${option[0]}-filter-value`}
-              checkedColor={isDashboardFilter ? "brand" : "accent7"}
-              checked={selectedValues.has(option[0])}
-              label={<LabelWrapper>{optionRenderer(option)}</LabelWrapper>}
-              onChange={() => handleToggleOption(option[0])}
-            />
-          </OptionContainer>
-        ))}
-      </OptionsList>
+      {isLoading && (
+        <Flex p="md" align="center" justify="center">
+          <LoadingSpinner size={24} />
+        </Flex>
+      )}
+
+      {!isLoading && (
+        <OptionsList isDashboardFilter={isDashboardFilter}>
+          {filteredOptions.length > 0 && (
+            <OptionContainer>
+              <Checkbox
+                variant="stacked"
+                label={getToggleAllLabel(debouncedFilter, isAll)}
+                checked={isAll}
+                indeterminate={!isAll && !isNone}
+                onChange={handleToggleAll}
+              />
+            </OptionContainer>
+          )}
+          {filteredOptions.map((option, index) => (
+            <OptionContainer key={index}>
+              <Checkbox
+                data-testid={`${option[0]}-filter-value`}
+                checked={selectedValues.has(option[0])}
+                label={optionRenderer(option)}
+                onChange={() => handleToggleOption(option[0])}
+              />
+            </OptionContainer>
+          ))}
+        </OptionsList>
+      )}
     </>
   );
 };
+
+function getToggleAllLabel(searchValue: string, isAll: boolean) {
+  if (isAll) {
+    return t`Select none`;
+  } else {
+    return searchValue ? t`Select these` : t`Select all`;
+  }
+}

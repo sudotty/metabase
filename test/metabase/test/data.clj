@@ -33,30 +33,46 @@
       ;; -> {:source-table (data/id :venues), :fields [(data/id :venues :name)]}
 
      (There are several variations of this macro; see documentation below for more details.)"
-  (:require [clojure.test :as t]
-            [colorize.core :as colorize]
-            [metabase.query-processor :as qp]
-            [metabase.test-runner.init :as test-runner.init]
-            [metabase.test.data.impl :as impl]
-            [metabase.test.data.interface :as tx]
-            [metabase.test.data.mbql-query-impl :as mbql-query-impl]
-            [metabase.util :as u]))
+  (:require
+   [clojure.test :as t]
+   [colorize.core :as colorize]
+   [mb.hawk.init]
+   [metabase.db :as mdb]
+   [metabase.db.schema-migrations-test.impl
+    :as schema-migrations-test.impl]
+   [metabase.driver.ddl.interface :as ddl.i]
+   [metabase.lib.metadata.jvm :as lib.metadata.jvm]
+   [metabase.lib.schema.id :as lib.schema.id]
+   [metabase.permissions.models.permissions-group :as perms-group]
+   [metabase.query-processor :as qp]
+   [metabase.test.data.impl :as data.impl]
+   [metabase.test.data.interface :as tx]
+   [metabase.test.data.mbql-query-impl :as mbql-query-impl]
+   [metabase.util.malli :as mu]
+   [next.jdbc]))
+
+(set! *warn-on-reflection* true)
 
 ;;; ------------------------------------------ Dataset-Independent Data Fns ------------------------------------------
 
 ;; These functions offer a generic way to get bits of info like Table + Field IDs from any of our many driver/dataset
 ;; combos.
 
-(defn db
+(mu/defn db :- [:map
+                [:id       ::lib.schema.id/database]
+                [:engine   :keyword]
+                [:name     :string]
+                [:settings [:map
+                            [:database-source-dataset-name :string]]]]
   "Return the current database.
-   Relies on the dynamic variable `*get-db*`, which can be rebound with `with-db`."
+   Relies on the dynamic variable [[metabase.test.data.impl/*db-fn*]], which can be rebound with [[with-db]]."
   []
-  (impl/*get-db*))
+  (data.impl/db))
 
 (defmacro with-db
   "Run body with `db` as the current database. Calls to `db` and `id` use this value."
   [db & body]
-  `(impl/do-with-db ~db (fn [] ~@body)))
+  `(data.impl/do-with-db ~db (^:once fn* [] ~@body)))
 
 (defmacro $ids
   "Convert symbols like `$field` to `id` fn calls. Input is split into separate args by splitting the token on `.`.
@@ -104,7 +120,7 @@
 
     *  Only symbols that end in alphanumeric characters will be parsed, so as to avoid accidentally parsing things that
        do not refer to Fields."
-  {:style/indent [:defn 1]}
+  {:style/indent :defn}
   ([form]
    `($ids nil ~form))
 
@@ -124,11 +140,11 @@
   (The 'cheatsheet' above is listed first so I can easily look at it with `autocomplete-mode` in Emacs.) This macro
   does the following:
 
-  *  Expands symbols like `$field` into calls to `id`, and wraps them in `:field-id`. See the dox for `$ids` for
+  *  Expands symbols like `$field` into calls to `id`, and wraps them in `:field-id`. See the dox for [[$ids]] for
      complete details.
   *  Wraps 'inner' query with the standard `{:database (data/id), :type :query, :query {...}}` boilerplate
   *  Adds `:source-table` clause if `:source-table` or `:source-query` is not already present"
-  {:style/indent 1}
+  {:style/indent :defn}
   ([table-name]
    `(mbql-query ~table-name {}))
 
@@ -137,7 +153,9 @@
    (as-> inner-query <>
      (mbql-query-impl/parse-tokens table-name <>)
      (mbql-query-impl/maybe-add-source-table <> table-name)
-     (mbql-query-impl/wrap-inner-query <>))))
+     (mbql-query-impl/wrap-populate-idents <>)
+     (mbql-query-impl/wrap-inner-query <>)
+     (vary-meta <> assoc :type :mbql-query))))
 
 (defmacro query
   "Like `mbql-query`, but operates on an entire 'outer' query rather than the 'inner' MBQL query. Like `mbql-query`,
@@ -150,10 +168,12 @@
   ([table-name outer-query]
    {:pre [(map? outer-query)]}
    (merge
+    ^{:type :mbql-query}
     {:database `(id)
      :type     :query}
     (cond-> (mbql-query-impl/parse-tokens table-name outer-query)
-      (not (:native outer-query)) (update :query mbql-query-impl/maybe-add-source-table table-name)))))
+      (not (:native outer-query)) (-> (update :query mbql-query-impl/maybe-add-source-table table-name)
+                                      (update :query mbql-query-impl/wrap-populate-idents))))))
 
 (defmacro native-query
   "Like `mbql-query`, but for native queries."
@@ -168,42 +188,55 @@
   (try
     (qp/process-query query)
     (catch Throwable e
-      (throw (ex-info (.getMessage e)
+      (throw (ex-info (ex-message e)
                       {:query query}
                       e)))))
 
 (defmacro run-mbql-query
   "Like `mbql-query`, but runs the query as well."
-  {:style/indent 1}
+  {:style/indent :defn}
   [table-name & [query]]
   `(run-mbql-query* (mbql-query ~table-name ~(or query {}))))
 
-(defn format-name
-  "Format a SQL schema, table, or field identifier in the correct way for the current database by calling the driver's
-  implementation of `format-name`. (Most databases use the default implementation of `identity`; H2 uses
-  `clojure.string/upper-case`.) This function DOES NOT quote the identifier."
-  [a-name]
-  (assert ((some-fn keyword? string? symbol?) a-name)
-    (str "Cannot format `nil` name -- did you use a `$field` without specifying its Table? (Change the form to"
-         " `$table.field`, or specify a top-level default Table to `$ids` or `mbql-query`.)"))
-  (tx/format-name (tx/driver) (name a-name)))
+(def ^:private FormattableName
+  [:or
+   :keyword
+   :string
+   :symbol
+   [:fn
+    {:error/message (str "Cannot format `nil` name -- did you use a `$field` without specifying its Table? "
+                         "(Change the form to `$table.field`, or specify a top-level default Table to "
+                         "`$ids` or `mbql-query`.)")}
+    (constantly false)]])
+
+(mu/defn format-name :- :string
+  "Format a SQL schema, table, or field identifier in the correct way for the current database by calling the current
+  driver's implementation of [[ddl.i/format-name]]. (Most databases use the default implementation of `identity`; H2
+  uses [[clojure.string/upper-case]].) This function DOES NOT quote the identifier."
+  [a-name :- FormattableName]
+  (ddl.i/format-name (tx/driver) (name a-name)))
 
 (defn id
-  "Get the ID of the current database or one of its Tables or Fields. Relies on the dynamic variable `*get-db*`, which
-  can be rebound with `with-db`."
+  "Get the ID of the current database or one of its Tables or Fields. Relies on the dynamic
+  variable [[metabase.test.data.impl/*db-fn*]], which can be rebound with [[with-db]]."
   ([]
-   (test-runner.init/assert-tests-are-not-initializing "(mt/id ...) or (data/id ...)")
-   (u/the-id (db)))
+   (mb.hawk.init/assert-tests-are-not-initializing "(mt/id ...) or (data/id ...)")
+   (data.impl/db-id))
 
   ([table-name]
-   (impl/the-table-id (id) (format-name table-name)))
+   (data.impl/the-table-id (id) (format-name table-name)))
 
   ([table-name field-name & nested-field-names]
-   (apply impl/the-field-id (id table-name) (map format-name (cons field-name nested-field-names)))))
+   (apply data.impl/the-field-id (id table-name) (map format-name (cons field-name nested-field-names)))))
+
+(defn metadata-provider
+  "Get a metadata-provider for the current database."
+  []
+  (lib.metadata.jvm/application-database-metadata-provider (id)))
 
 (defmacro dataset
   "Create a database and load it with the data defined by `dataset`, then do a quick metadata-only sync; make it the
-  current DB (for `metabase.test.data` functions like `id` and `db`), and execute `body`.
+  current DB (for [[metabase.test.data]] functions like [[id]] and [[db]]), and execute `body`.
 
   `dataset` can be one of the following:
 
@@ -224,21 +257,50 @@
   *  An inline dataset definition:
 
      (data/dataset (get-dataset-definition) ...)"
-  {:style/indent 1}
+  {:style/indent :defn}
   [dataset & body]
   `(t/testing (colorize/magenta ~(str (if (symbol? dataset)
                                         (format "using %s dataset" dataset)
                                         "using inline dataset")
                                       \newline))
-     (impl/do-with-dataset ~(if (and (symbol? dataset)
-                                     (not (get &env dataset)))
-                              `(impl/resolve-dataset-definition '~(ns-name *ns*) '~dataset)
-                              dataset)
-       (fn [] ~@body))))
+     (data.impl/do-with-dataset ~(if (and (symbol? dataset)
+                                          (not (get &env dataset)))
+                                   `(data.impl/resolve-dataset-definition '~(ns-name *ns*) '~dataset)
+                                   dataset)
+                                (^:once fn* [] ~@body))))
 
 (defmacro with-temp-copy-of-db
   "Run `body` with the current DB (i.e., the one that powers `data/db` and `data/id`) bound to a temporary copy of the
   current DB. Tables and Fields are copied as well."
   {:style/indent 0}
   [& body]
-  `(impl/do-with-temp-copy-of-db (fn [] ~@body)))
+  `(data.impl/do-with-temp-copy-of-db (^:once fn* [] ~@body)))
+
+(def h2-app-db-script
+  "To save time during tests, instead of running all migrations for each new empty H2 app db, we perform the
+  migrations once and dump the schema into a script. Subsequently, this script can be used to instantiate new copies
+  of H2 app db. The result is a dereffable temp file."
+  (delay
+    (schema-migrations-test.impl/with-temp-empty-app-db [conn :h2]
+      ;; since the actual group defs are not dynamic, we need with-redefs to change them here
+      (with-redefs [perms-group/all-users (#'perms-group/magic-group perms-group/all-users-group-name)
+                    perms-group/admin     (#'perms-group/magic-group perms-group/admin-group-name)]
+        (mdb/setup-db! :create-sample-content? false)
+        (let [f (java.io.File/createTempFile "db-export" ".sql")]
+          (next.jdbc/execute! conn ["SCRIPT TO ?" (str f)])
+          f)))))
+
+;;; TODO FIXME -- rename this to `with-empty-h2-app-db!`
+#_{:clj-kondo/ignore [:metabase/test-helpers-use-non-thread-safe-functions]}
+(defmacro with-empty-h2-app-db
+  "Runs `body` under a new, blank, H2 application database (randomly named), in which all model tables have been
+  created from `h2-app-db-script`. After `body` is finished, the original app DB bindings are restored.
+
+  Makes use of functionality in the [[metabase.db.schema-migrations-test.impl]] namespace since that already does what
+  we need."
+  {:style/indent 0}
+  [& body]
+  `(schema-migrations-test.impl/with-temp-empty-app-db [conn# :h2]
+     (next.jdbc/execute! conn# ["RUNSCRIPT FROM ?" (str @h2-app-db-script)])
+     (mdb/finish-db-setup)
+     ~@body))

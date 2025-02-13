@@ -3,11 +3,11 @@
 ## License
 
 Usage of files in this directory and its subdirectories, and of Metabase Enterprise Edition features, is subject to
-the [Metabase Commercial License](https://www.metabase.com/license/commercial/), and conditional on having a
+the [Metabase Commercial License](https://www.metabase.com/license/commercial), and conditional on having a
 fully-paid-up license from Metabase. Access to files in this directory and its subdirectories does not constitute
 permission to use this code or Metabase Enterprise Edition features.
 
-Unless otherwise noted, all files Copyright © 2022 Metabase, Inc.
+Unless otherwise noted, all files Copyright © 2024 Metabase, Inc.
 
 ## Running it
 

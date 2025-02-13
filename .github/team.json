@@ -1,0 +1,87 @@
+{
+  "teams": [
+    {
+      "name": "Querying",
+      "label": ".Team/Querying",
+      "projectUrl": "https://github.com/orgs/metabase/projects/97/views/1",
+      "members": [
+        "ranquild",
+        "kamilmielnik",
+        "romeovs",
+        "bshepherdson",
+        "metamben",
+        "lbrdnk",
+        "appleby",
+        "uladzimirdev",
+        "wzimrin",
+        "ericnormand"
+      ]
+    },
+    {
+      "name": "Drivers",
+      "label": ".Team/Drivers",
+      "projectUrl": "https://github.com/orgs/metabase/projects/98/views/1",
+      "members": [
+        "snoe",
+        "rileythomp"
+      ]
+    },
+    {
+      "name": "Embedding",
+      "label": ".Team/Embedding",
+      "projectUrl": "https://github.com/orgs/metabase/projects/88/views/1",
+      "members": [
+        "WiNloSt",
+        "oisincoveney",
+        "npretto",
+        "heypoom",
+        "sanex3339"
+      ]
+    },
+    {
+      "name": "Workflows",
+      "label": ".Team/Workflows",
+      "projectUrl": "https://github.com/orgs/metabase/projects/50/views/1",
+      "members": [
+        "qnkhuat",
+        "piranha",
+        "crisptrutski",
+        "deniskaber",
+        "wotbrew"
+      ]
+    },
+    {
+      "name": "Admin Webapp",
+      "label": ".Team/AdminWebapp",
+      "members": [
+        "npfitz",
+        "johnswanson",
+        "rafpaf",
+        "sloansparger",
+        "iethree",
+        "nvoxland",
+        "fraserdrops",
+        "edpaget"
+      ]
+    },
+    {
+      "name": "DashViz",
+      "label": ".Team/DashViz",
+      "members": [
+        "alxnddr",
+        "kulyk",
+        "tsplude",
+        "lorem--ipsum",
+        "noahmoss"
+      ]
+    },
+    {
+      "name": "DevEx",
+      "label": ".Team/DevEx",
+      "members": [
+        "camsaul",
+        "escherize"
+      ]
+    }
+  ]
+}

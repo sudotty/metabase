@@ -1,12 +1,9 @@
-import React from "react";
 import { t } from "ttag";
 
-import {
-  ToastCard,
-  ToastMessage,
-  TabIcon,
-  CloseIcon,
-} from "./TabHintToast.styled";
+import Card from "metabase/components/Card";
+import { Box, Icon } from "metabase/ui";
+
+import TabHintToastS from "./TabHintToast.module.css";
 
 type Props = {
   className?: string;
@@ -15,10 +12,18 @@ type Props = {
 
 export function TabHintToast({ className, onClose }: Props) {
   return (
-    <ToastCard className={className}>
-      <TabIcon name="tab" size={14} />
-      <ToastMessage>{t`Use the tab key to navigate through settings and columns.`}</ToastMessage>
-      <CloseIcon name="close" size={12} onClick={onClose} />
-    </ToastCard>
+    <Card className={`${className} ${TabHintToastS.ToastCard}`}>
+      <Icon className={TabHintToastS.TabIcon} name="tab" />
+      <Box
+        component="span"
+        className={TabHintToastS.ToastMessage}
+      >{t`Use the tab key to navigate through settings and columns.`}</Box>
+      <Icon
+        className={TabHintToastS.CloseIcon}
+        name="close"
+        size={12}
+        onClick={onClose}
+      />
+    </Card>
   );
 }

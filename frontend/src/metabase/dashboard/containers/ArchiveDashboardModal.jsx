@@ -1,60 +1,76 @@
 /* eslint-disable react/prop-types */
-import React, { Component } from "react";
 import PropTypes from "prop-types";
-import { t } from "ttag";
-
-import { connect } from "react-redux";
+import { Component } from "react";
 import { withRouter } from "react-router";
 import { push } from "react-router-redux";
+import { t } from "ttag";
+import _ from "underscore";
 
+import { ArchiveModal } from "metabase/components/ArchiveModal";
+import { setArchivedDashboard } from "metabase/dashboard/actions";
+import Collections from "metabase/entities/collections";
+import Dashboards from "metabase/entities/dashboards";
+import { connect } from "metabase/lib/redux";
 import * as Urls from "metabase/lib/urls";
 
-import Collection from "metabase/entities/collections";
-import Dashboard from "metabase/entities/dashboards";
+const mapDispatchToProps = dispatch => ({
+  setDashboardArchived: () => dispatch(setArchivedDashboard(true)),
+  push: path => dispatch(push(path)),
+});
 
-import ArchiveModal from "metabase/components/ArchiveModal";
-
-const mapDispatchToProps = {
-  setDashboardArchived: Dashboard.actions.setArchived,
-  push,
-};
-
-@connect(null, mapDispatchToProps)
-@Dashboard.load({
-  id: (state, props) => Urls.extractCollectionId(props.params.slug),
-})
-@Collection.load({
-  id: (state, props) => props.dashboard && props.dashboard.collection_id,
-})
-@withRouter
-export default class ArchiveDashboardModal extends Component {
+class ArchiveDashboardModal extends Component {
   static propTypes = {
     onClose: PropTypes.func,
   };
 
-  close = () => {
-    // since we need to redirect back to the parent collection when archiving
-    // we have to call this here first to unmount the modal and then push to the
-    // parent collection
-    this.props.onClose();
-    if (this.props.dashboard.archived) {
-      this.props.push(Urls.collection(this.props.collection));
-    }
-  };
+  constructor(props) {
+    super(props);
+    this.state = { loading: false };
+  }
 
   archive = async () => {
     const dashboardId = Urls.extractEntityId(this.props.params.slug);
-    await this.props.setDashboardArchived({ id: dashboardId }, true);
+    this.setState({ loading: true });
+    await this.props.setDashboardArchived(dashboardId);
+    this.setState({ loading: false });
   };
 
   render() {
+    const { dashboard } = this.props;
+
+    const hasDashboardQuestions = dashboard.dashcards
+      .filter(dc => dc.card) // card might be null for virtual cards
+      .some(dc => _.isNumber(dc.card.dashboard_id));
+
+    const message = hasDashboardQuestions
+      ? t`This will trash the dashboard and the questions that are saved in it. Are you sure you want to do this?`
+      : t`Are you sure you want to do this?`;
+
     return (
       <ArchiveModal
-        title={t`Archive this dashboard?`}
-        message={t`Are you sure you want to do this?`}
-        onClose={this.close}
+        title={
+          dashboard.is_app_age
+            ? t`Move this page to trash?`
+            : t`Move this dashboard to trash?`
+        }
+        model="dashboard"
+        modelId={dashboard?.id}
+        message={message}
+        onClose={this.props.onClose}
+        isLoading={this.state.loading}
         onArchive={this.archive}
       />
     );
   }
 }
+
+export const ArchiveDashboardModalConnected = _.compose(
+  connect(null, mapDispatchToProps),
+  Dashboards.load({
+    id: (state, props) => Urls.extractCollectionId(props.params.slug),
+  }),
+  Collections.load({
+    id: (state, props) => props.dashboard && props.dashboard.collection_id,
+  }),
+  withRouter,
+)(ArchiveDashboardModal);

@@ -1,0 +1,17 @@
+button.horizontalButton {
+  &:hover {
+    .nested {
+      color: var(--mb-color-text-white);
+    }
+  }
+
+  .inner {
+    width: 100%;
+  }
+
+  .label {
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+  }
+}

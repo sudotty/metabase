@@ -1,12 +1,14 @@
-import React, { useCallback, useState } from "react";
 import PropTypes from "prop-types";
+import { useCallback, useState } from "react";
 import { t } from "ttag";
-import Settings from "metabase/lib/settings";
+
+import ModalContent from "metabase/components/ModalContent";
+import Button from "metabase/core/components/Button";
+import { FormMessage } from "metabase/forms";
 import { formatDateTimeWithUnit } from "metabase/lib/formatting";
 import { formatChannelRecipients } from "metabase/lib/notifications";
-import Button from "metabase/core/components/Button";
-import ModalContent from "metabase/components/ModalContent";
-import FormMessage from "metabase/components/form/FormMessage";
+import Settings from "metabase/lib/settings";
+
 import { ModalMessage } from "./ArchiveModal.styled";
 
 const propTypes = {
@@ -52,7 +54,7 @@ const ArchiveModal = ({
       onClose={onClose}
     >
       {isCreator(item, user) && hasUnsubscribed && (
-        <ModalMessage>
+        <ModalMessage data-server-date>
           {getCreatorMessage(type, user)}
           {t`As the creator you can also choose to delete this if it’s no longer relevant to others as well.`}
         </ModalMessage>

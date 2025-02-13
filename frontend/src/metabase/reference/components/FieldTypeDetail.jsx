@@ -1,15 +1,14 @@
-import React from "react";
-import PropTypes from "prop-types";
 import cx from "classnames";
 import { getIn } from "icepick";
+import PropTypes from "prop-types";
+import { memo } from "react";
 import { t } from "ttag";
-import * as MetabaseCore from "metabase/lib/core";
-import { isNumericBaseType } from "metabase/lib/schema_metadata";
-import { isFK } from "metabase/lib/types";
 
 import Select from "metabase/core/components/Select";
-
-import D from "metabase/reference/components/Detail.css";
+import CS from "metabase/css/core/index.css";
+import * as MetabaseCore from "metabase/lib/core";
+import D from "metabase/reference/components/Detail.module.css";
+import { isNumericBaseType, isTypeFK } from "metabase-lib/v1/types/utils/isa";
 
 const FieldTypeDetail = ({
   field,
@@ -21,9 +20,9 @@ const FieldTypeDetail = ({
   <div className={cx(D.detail)}>
     <div className={D.detailBody}>
       <div className={D.detailTitle}>
-        <span className={D.detailName}>{t`Field type`}</span>
+        <span>{t`Field type`}</span>
       </div>
-      <div className={cx(D.detailSubtitle, { mt1: true })}>
+      <div className={cx(D.detailSubtitle, { [CS.mt1]: true })}>
         <span>
           {isEditing ? (
             <Select
@@ -54,10 +53,10 @@ const FieldTypeDetail = ({
             </span>
           )}
         </span>
-        <span className="ml4">
+        <span className={CS.ml4}>
           {isEditing
-            ? (isFK(fieldTypeFormField.value) ||
-                (isFK(field.semantic_type) &&
+            ? (isTypeFK(fieldTypeFormField.value) ||
+                (isTypeFK(field.semantic_type) &&
                   fieldTypeFormField.value === undefined)) && (
                 <Select
                   placeholder={t`Select a foreign key`}
@@ -69,7 +68,7 @@ const FieldTypeDetail = ({
                   optionValueFn={o => o.id}
                 />
               )
-            : isFK(field.semantic_type) && (
+            : isTypeFK(field.semantic_type) && (
                 <span>
                   {getIn(foreignKeys, [field.fk_target_field_id, "name"])}
                 </span>
@@ -87,4 +86,4 @@ FieldTypeDetail.propTypes = {
   isEditing: PropTypes.bool.isRequired,
 };
 
-export default React.memo(FieldTypeDetail);
+export default memo(FieldTypeDetail);

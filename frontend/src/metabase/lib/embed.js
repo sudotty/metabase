@@ -1,17 +1,16 @@
 import { push } from "react-router-redux";
-
 import _ from "underscore";
 
-import { IFRAMED, IFRAMED_IN_SELF } from "metabase/lib/dom";
-
-import { isFitViewportMode } from "metabase/hoc/FitViewPort";
+import CS from "metabase/css/core/index.css";
+import { IFRAMED_IN_SELF, isWithinIframe } from "metabase/lib/dom";
+import { setInitialUrlOptions } from "metabase/redux/embed";
 
 // detect if this page is embedded in itself, i.e. it's a embed preview
 // will need to do something different if we ever embed metabase in itself for another reason
 export const IS_EMBED_PREVIEW = IFRAMED_IN_SELF;
 
 export function initializeEmbedding(store) {
-  if (IFRAMED) {
+  if (isWithinIframe()) {
     let currentHref;
     let currentFrame;
     // NOTE: history.listen and window's onhashchange + popstate events were not
@@ -42,6 +41,8 @@ export function initializeEmbedding(store) {
         }
       }
     });
+
+    store.dispatch(setInitialUrlOptions(window.location));
   }
 }
 
@@ -56,10 +57,44 @@ function sendMessage(message) {
   window.parent.postMessage({ metabase: message }, "*");
 }
 
+function isFitViewportMode() {
+  const root = document.getElementById("root");
+
+  // get the first div, which may be preceded by style nodes
+  const firstChild = root?.querySelector("div");
+
+  if (firstChild) {
+    return firstChild.classList.contains(CS.spread);
+  }
+  return false;
+}
+
 function getFrameSpec() {
   if (isFitViewportMode()) {
-    return { mode: "fit" };
+    return { mode: "fit", height: getScrollHeight() };
   } else {
     return { mode: "normal", height: document.body.scrollHeight };
   }
+}
+
+function defaultGetScrollHeight() {
+  return document.body.scrollHeight;
+}
+
+function getScrollHeight() {
+  const appBarHeight =
+    document.getElementById("[data-element-id=app-bar]")?.offsetHeight ?? 0;
+  const dashboardHeaderHeight =
+    document.querySelector("[data-element-id=dashboard-header-container]")
+      ?.offsetHeight ?? 0;
+  const dashboardContentHeight =
+    document.querySelector("[data-element-id=dashboard-parameters-and-cards]")
+      ?.scrollHeight ?? 0;
+  const dashboardHeight = dashboardHeaderHeight + dashboardContentHeight;
+
+  if (dashboardHeight > 0) {
+    return appBarHeight + dashboardHeight;
+  }
+
+  return defaultGetScrollHeight();
 }

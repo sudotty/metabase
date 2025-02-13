@@ -1,23 +1,19 @@
-import React from "react";
-import DatabaseHelpCard from "metabase/containers/DatabaseHelpCard";
-import { DatabaseHelpRoot } from "./DatabaseHelp.styled";
+import { DatabaseHelpCard } from "metabase/databases/components/DatabaseHelpCard";
+import { useSelector } from "metabase/lib/redux";
 
-export interface DatabaseHelpProps {
-  engine?: string;
-  isStepActive: boolean;
-}
+import { getDatabaseEngine, getIsStepActive } from "../../selectors";
+import { SetupCardContainer } from "../SetupCardContainer";
 
-const DatabaseHelp = ({
-  engine,
-  isStepActive,
-}: DatabaseHelpProps): JSX.Element => {
+export const DatabaseHelp = (): JSX.Element => {
+  const engine = useSelector(getDatabaseEngine);
+  const isStepActive = useSelector(state =>
+    getIsStepActive(state, "db_connection"),
+  );
   const isVisible = isStepActive && engine != null;
 
   return (
-    <DatabaseHelpRoot isVisible={isVisible}>
+    <SetupCardContainer isVisible={isVisible}>
       <DatabaseHelpCard />
-    </DatabaseHelpRoot>
+    </SetupCardContainer>
   );
 };
-
-export default DatabaseHelp;

@@ -1,16 +1,16 @@
 (ns metabase-enterprise.audit-app.query-processor.middleware.handle-audit-queries-test
   "Additional tests for this namespace can be found in `metabase-enterprise.audit-app.pages-test`."
-  (:require [clojure.test :refer :all]
-            [metabase-enterprise.audit-app.interface :as audit.i]
-            [metabase.public-settings.premium-features-test :as premium-features-test]
-            [metabase.query-processor :as qp]
-            [metabase.test :as mt]
-            [metabase.util :as u]))
+  (:require
+   [clojure.test :refer :all]
+   [metabase-enterprise.audit-app.interface :as audit.i]
+   [metabase.query-processor :as qp]
+   [metabase.test :as mt]
+   [metabase.util :as u]))
 
 (defn- run-query
   [query-type & {:as additional-query-params}]
   (mt/with-test-user :crowberto
-    (premium-features-test/with-premium-features #{:audit-app}
+    (mt/with-premium-features #{:audit-app}
       (qp/process-query (merge {:type :internal
                                 :fn   (u/qualified-name query-type)}
                                additional-query-params)))))
@@ -30,7 +30,7 @@
                           [3 5]])
    :xform    (map #(update (vec %) 0 inc))})
 
-(deftest transform-results-test
+(deftest ^:parallel transform-results-test
   (testing "Make sure query function result are transformed to QP results correctly"
     (doseq [[format-name {:keys [query-type expected-rows]}] {"legacy"    {:query-type    ::legacy-format-query-fn
                                                                            :expected-rows [[100 2] [3 5]]}

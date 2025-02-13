@@ -1,28 +1,23 @@
-import React, {
-  ChangeEvent,
-  FocusEvent,
-  forwardRef,
-  InputHTMLAttributes,
-  Ref,
-  useCallback,
-  useMemo,
-  useState,
-} from "react";
+import type { ChangeEvent, FocusEvent, InputHTMLAttributes, Ref } from "react";
+import { forwardRef, useCallback, useMemo, useState } from "react";
+
 import Input from "metabase/core/components/Input";
 
 export type NumericInputAttributes = Omit<
   InputHTMLAttributes<HTMLDivElement>,
-  "value" | "onChange"
+  "value" | "size" | "onChange"
 >;
 
 export interface NumericInputProps extends NumericInputAttributes {
   value?: number | string;
-  inputRef?: Ref<HTMLInputElement>;
   error?: boolean;
   fullWidth?: boolean;
   onChange?: (value: number | undefined) => void;
 }
 
+/**
+ * @deprecated: use NumberInput from "metabase/ui"
+ */
 const NumericInput = forwardRef(function NumericInput(
   { value, onFocus, onBlur, onChange, ...props }: NumericInputProps,
   ref: Ref<HTMLDivElement>,
@@ -75,4 +70,5 @@ const NumericInput = forwardRef(function NumericInput(
   );
 });
 
+// eslint-disable-next-line import/no-default-export -- deprecated usage
 export default NumericInput;

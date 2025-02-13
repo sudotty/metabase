@@ -1,10 +1,14 @@
 (ns metabase.models.collection.root
-  (:require [metabase.models.interface :as i]
-            [metabase.models.permissions :as perms]
-            [metabase.public-settings.premium-features :as settings.premium-features]
-            [metabase.util :as u]
-            [potemkin.types :as p.types]
-            [toucan.models :as models]))
+  (:require
+   [medley.core :as m]
+   [metabase.models.interface :as mi]
+   [metabase.permissions.core :as perms]
+   [metabase.premium-features.core :as premium-features]
+   [metabase.util :as u]
+   [metabase.util.i18n :refer [tru]]
+   [potemkin.types :as p.types]
+   [toucan2.protocols :as t2.protocols]
+   [toucan2.tools.hydrate :refer [hydrate]]))
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
 ;;; |                                   Root Collection Special Placeholder Object                                   |
@@ -16,28 +20,26 @@
 
 (p.types/defrecord+ RootCollection [])
 
-(defn- has-perms? [collection read-or-write]
+(doto RootCollection
+  (derive ::mi/read-policy.full-perms-for-perms-set)
+  (derive ::mi/write-policy.full-perms-for-perms-set))
+
+(extend-protocol t2.protocols/IModel
+  RootCollection
+  (model [_this]
+    RootCollection))
+
+(defmethod mi/perms-objects-set RootCollection
+  [collection read-or-write]
   {:pre [(map? collection)]}
   ;; HACK Collections in the "snippets" namespace have no-op permissions unless EE enhancements are enabled
   (if (and (= (u/qualified-name (:namespace collection)) "snippets")
-           (not (settings.premium-features/enable-enhancements?)))
+           #_{:clj-kondo/ignore [:deprecated-var]}
+           (not (premium-features/enable-enhancements?)))
     #{}
     #{((case read-or-write
          :read  perms/collection-read-path
          :write perms/collection-readwrite-path) collection)}))
-
-(u/strict-extend RootCollection
-  models/IModel
-  (merge
-   models/IModelDefaults
-   {:types {:type :keyword}})
-
-  i/IObjectPermissions
-  (merge
-   i/IObjectPermissionsDefaults
-   {:perms-objects-set has-perms?
-    :can-read?         (partial i/current-user-has-full-permissions? :read)
-    :can-write?        (partial i/current-user-has-full-permissions? :write)}))
 
 (def ^RootCollection root-collection
   "Special placeholder object representing the Root Collection, which isn't really a real Collection."
@@ -48,3 +50,27 @@
   [x]
   ;; TODO -- not sure this makes sense because other places we check whether `::is-root?` is present or not.
   (instance? RootCollection x))
+
+(defn root-collection-with-ui-details
+  "The special Root Collection placeholder object with some extra details to facilitate displaying it on the FE."
+  [collection-namespace]
+  (m/assoc-some root-collection
+                :name (case (keyword collection-namespace)
+                        :snippets (tru "Top folder")
+                        (tru "Our analytics"))
+                :namespace collection-namespace
+                :is_personal false
+                :id   "root"))
+
+(defn hydrated-root-collection
+  "Return the root collection entity."
+  []
+  (-> (root-collection-with-ui-details nil)
+      (hydrate :can_write)))
+
+(defn hydrate-root-collection
+  "Hydrate `:collection` onto entity when the id is `nil`."
+  ([entity] (hydrate-root-collection entity (hydrated-root-collection)))
+  ([{:keys [collection_id] :as entity} root-collection]
+   (cond-> entity
+     (nil? collection_id) (assoc :collection root-collection))))

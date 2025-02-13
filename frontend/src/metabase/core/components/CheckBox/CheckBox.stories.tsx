@@ -1,6 +1,7 @@
-import React, { ChangeEvent } from "react";
-import { ComponentStory } from "@storybook/react";
-import { useArgs } from "@storybook/client-api";
+import { useArgs } from "@storybook/preview-api";
+import type { StoryFn } from "@storybook/react";
+import type { ChangeEvent } from "react";
+
 import CheckBox from "./CheckBox";
 
 export default {
@@ -8,7 +9,7 @@ export default {
   component: CheckBox,
 };
 
-const Template: ComponentStory<typeof CheckBox> = args => {
+const Template: StoryFn<typeof CheckBox> = args => {
   const [{ checked }, updateArgs] = useArgs();
 
   const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -18,19 +19,28 @@ const Template: ComponentStory<typeof CheckBox> = args => {
   return <CheckBox {...args} checked={checked} onChange={handleChange} />;
 };
 
-export const Default = Template.bind({});
-Default.args = {
-  checked: false,
+export const Default = {
+  render: Template,
+
+  args: {
+    checked: false,
+  },
 };
 
-export const WithLabel = Template.bind({});
-WithLabel.args = {
-  checked: false,
-  label: "Label",
+export const WithLabel = {
+  render: Template,
+
+  args: {
+    checked: false,
+    label: "Label",
+  },
 };
 
-export const WithCustomLabel = Template.bind({});
-WithCustomLabel.args = {
-  checked: false,
-  label: <strong style={{ marginLeft: "8px" }}>Label</strong>,
+export const WithCustomLabel = {
+  render: Template,
+
+  args: {
+    checked: false,
+    label: <strong style={{ marginLeft: "8px" }}>Label</strong>,
+  },
 };

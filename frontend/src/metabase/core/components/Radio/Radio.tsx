@@ -1,26 +1,20 @@
-import React, {
-  forwardRef,
-  HTMLAttributes,
-  Key,
-  Ref,
-  useCallback,
-  useMemo,
-} from "react";
+import type { HTMLAttributes, Key, ReactNode, Ref } from "react";
+import { forwardRef, useCallback, useMemo } from "react";
 import _ from "underscore";
-import { RadioColorScheme, RadioVariant } from "./types";
+
 import {
   RadioButton,
   RadioContainerBubble,
   RadioContainerNormal,
   RadioContainerUnderlined,
+  RadioGroupBubble,
+  RadioGroupNormal,
   RadioInput,
   RadioLabelBubble,
   RadioLabelNormal,
   RadioLabelText,
-  RadioGroup,
-  RadioGroupBubble,
-  RadioGroupNormal,
 } from "./Radio.styled";
+import type { RadioColorScheme, RadioVariant } from "./types";
 
 const VARIANTS = {
   normal: {
@@ -40,13 +34,13 @@ const VARIANTS = {
   },
 };
 
-export interface RadioProps<TValue extends Key, TOption = RadioOption<TValue>>
+export interface RadioProps<TValue, TOption = RadioOption<TValue>>
   extends Omit<HTMLAttributes<HTMLDivElement>, "onChange"> {
   name?: string;
   value?: TValue;
   options: TOption[];
   optionKeyFn?: (option: TOption) => Key;
-  optionNameFn?: (option: TOption) => string;
+  optionNameFn?: (option: TOption) => ReactNode;
   optionValueFn?: (option: TOption) => TValue;
   variant?: RadioVariant;
   colorScheme?: RadioColorScheme;
@@ -58,13 +52,13 @@ export interface RadioProps<TValue extends Key, TOption = RadioOption<TValue>>
 }
 
 export interface RadioOption<TValue> {
-  name: string;
+  name: ReactNode;
   value: TValue;
 }
 
-const Radio = forwardRef(function Radio<
-  TValue extends Key,
-  TOption = RadioOption<TValue>
+const BaseRadio = forwardRef(function Radio<
+  TValue,
+  TOption = RadioOption<TValue>,
 >(
   {
     name,
@@ -83,7 +77,7 @@ const Radio = forwardRef(function Radio<
     ...props
   }: RadioProps<TValue, TOption>,
   ref: Ref<HTMLDivElement>,
-): JSX.Element {
+) {
   const { RadioGroup } = VARIANTS[variant];
   const groupName = useMemo(() => name ?? _.uniqueId("radio-"), [name]);
 
@@ -91,7 +85,7 @@ const Radio = forwardRef(function Radio<
     <RadioGroup
       {...props}
       role="radiogroup"
-      ref={ref as any}
+      ref={ref}
       variant={variant}
       vertical={vertical}
     >
@@ -122,10 +116,10 @@ const Radio = forwardRef(function Radio<
   );
 });
 
-interface RadioItemProps<TValue extends Key> {
+interface RadioItemProps<TValue> {
   name: string;
   checked: boolean;
-  label: string;
+  label: ReactNode;
   value: TValue;
   variant: RadioVariant;
   colorScheme: RadioColorScheme;
@@ -136,7 +130,7 @@ interface RadioItemProps<TValue extends Key> {
   onOptionClick?: (value: TValue) => void;
 }
 
-const RadioItem = <TValue extends Key, TOption>({
+const RadioItem = <TValue,>({
   checked,
   name,
   label,
@@ -164,7 +158,7 @@ const RadioItem = <TValue extends Key, TOption>({
       <RadioInput
         type="radio"
         name={name}
-        value={value}
+        value={String(value)}
         checked={checked}
         disabled={disabled}
         onChange={handleChange}
@@ -185,29 +179,23 @@ const RadioItem = <TValue extends Key, TOption>({
   );
 };
 
-const getDefaultOptionKey = <TValue extends Key, TOption>(
-  option: TOption,
-): Key => {
+const getDefaultOptionKey = <TValue, TOption>(option: TOption): Key => {
   if (isDefaultOption<TValue>(option)) {
-    return option.value;
+    return String(option.value);
   } else {
     throw new TypeError();
   }
 };
 
-const getDefaultOptionName = <TValue extends Key, TOption>(
-  option: TOption,
-): string => {
-  if (isDefaultOption(option)) {
+const getDefaultOptionName = <TValue, TOption>(option: TOption): ReactNode => {
+  if (isDefaultOption<TValue>(option)) {
     return option.name;
   } else {
     throw new TypeError();
   }
 };
 
-const getDefaultOptionValue = <TValue extends Key, TOption>(
-  option: TOption,
-): TValue => {
+const getDefaultOptionValue = <TValue, TOption>(option: TOption): TValue => {
   if (isDefaultOption<TValue>(option)) {
     return option.value;
   } else {
@@ -221,6 +209,19 @@ function isDefaultOption<TValue>(
   return typeof option === "object";
 }
 
-export default Object.assign(Radio, {
-  RadioGroup,
+/**
+ * @deprecated: use Radio from "metabase/ui"
+ */
+const Radio = Object.assign(BaseRadio, {
+  RadioGroupVariants: [RadioGroupBubble, RadioGroupNormal],
+  RadioLabelVariants: [RadioLabelBubble, RadioLabelNormal],
+  RadioLabelText: RadioLabelText,
+  RadioContainerVariants: [
+    RadioContainerBubble,
+    RadioContainerNormal,
+    RadioContainerUnderlined,
+  ],
 });
+
+// eslint-disable-next-line import/no-default-export -- deprecated usage
+export default Radio;

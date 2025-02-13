@@ -1,19 +1,19 @@
 import { useCallback, useRef } from "react";
 import _ from "underscore";
 
+import { isElement } from "metabase-types/guards";
+
 type PopoverData = {
   contentEl: Element;
-  close: () => void;
+  backdropEl?: Element;
+  ignoreEl?: Element;
+  close: (e: MouseEvent | KeyboardEvent) => void;
 };
 
 export const RENDERED_POPOVERS: PopoverData[] = [];
 
-function isElement(a: any): a is Element {
-  return a instanceof Element;
-}
-
-function isEventOutsideOfElement(e: Event, el: Element) {
-  return isElement(e.target) && !el.contains(e.target);
+function isEventInsideElement(e: Event, el: Element) {
+  return isElement(e.target) && el.contains(e.target);
 }
 
 export function removePopoverData(popoverData: PopoverData) {
@@ -33,7 +33,10 @@ export function shouldClosePopover(
     return (
       mostRecentPopover &&
       mostRecentPopover === popoverData &&
-      isEventOutsideOfElement(e, mostRecentPopover.contentEl)
+      !isEventInsideElement(e, mostRecentPopover.contentEl) &&
+      (!popoverData.backdropEl ||
+        isEventInsideElement(e, popoverData.backdropEl)) &&
+      (!popoverData.ignoreEl || !isEventInsideElement(e, popoverData.ignoreEl))
     );
   }
 
@@ -49,6 +52,7 @@ export function shouldClosePopover(
   return false;
 }
 
+// eslint-disable-next-line import/no-default-export -- deprecated usage
 export default function useSequencedContentCloseHandler() {
   const popoverDataRef = useRef<PopoverData>();
 
@@ -57,7 +61,7 @@ export default function useSequencedContentCloseHandler() {
       popoverDataRef.current &&
       shouldClosePopover(e, popoverDataRef.current)
     ) {
-      popoverDataRef.current.close();
+      popoverDataRef.current.close(e);
     }
   }, []);
 
@@ -67,8 +71,8 @@ export default function useSequencedContentCloseHandler() {
       popoverDataRef.current = undefined;
     }
 
-    document.removeEventListener("mousedown", handleEvent, true);
     document.removeEventListener("keydown", handleEvent);
+    window.removeEventListener("mousedown", handleEvent, true);
   }, [handleEvent]);
 
   const setupCloseHandler = useCallback(
@@ -80,8 +84,8 @@ export default function useSequencedContentCloseHandler() {
         RENDERED_POPOVERS.push(popover);
         popoverDataRef.current = popover;
 
-        document.addEventListener("mousedown", handleEvent, true);
-        window.addEventListener("keydown", handleEvent);
+        document.addEventListener("keydown", handleEvent);
+        window.addEventListener("mousedown", handleEvent, true);
       }
     },
     [handleEvent, removeCloseHandler],
